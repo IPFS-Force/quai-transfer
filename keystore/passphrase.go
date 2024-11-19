@@ -25,7 +25,7 @@ import (
 const (
 	keyHeaderKDF = "scrypt"
 
-	// StandardScryptN is the N parameter of Scrypt encryption algorithm, using 256MB
+	// StandardScryptN is the rN parameter of Scrypt encryption algorithm, using 256MB
 	// memory and taking approximately 1s CPU time on a modern processor.
 	StandardScryptN = 1 << 18
 
@@ -96,7 +96,12 @@ func (ks keyStorePassphrase) StoreKey(filename string, key *Key, auth string) er
 			return fmt.Errorf(msg, tmpName, err)
 		}
 	}
-	return os.Rename(tmpName, filename)
+	err = os.Rename(tmpName, filename)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("StoreKey: key file %s saved\n", filename)
+	return nil
 }
 
 func (ks keyStorePassphrase) JoinPath(filename string) string {
@@ -123,7 +128,7 @@ func EncryptKey(key *Key, auth string, scryptN, scryptP int) ([]byte, error) {
 	return json.Marshal(encryptedKeyJSONV3)
 }
 
-// Encryptdata encrypts the data given as 'data' with the password 'auth'.
+// EncryptDataV3 encrypts the data given as 'data' with the password 'auth'.
 func EncryptDataV3(data, auth []byte, scryptN, scryptP int) (CryptoJSON, error) {
 
 	salt := make([]byte, 32)
@@ -254,7 +259,7 @@ func DecryptKey(keyjson []byte, auth string) (*Key, error) {
 	}
 	return &Key{
 		Id:         id,
-		Address:    crypto.PubkeyToAddress(key.PublicKey, config.Conf.Location),
+		Address:    crypto.PubkeyToAddress(key.PublicKey, config.GlobalLocation),
 		PrivateKey: key,
 	}, nil
 }
@@ -375,9 +380,6 @@ func getKDFKey(cryptoJSON CryptoJSON, auth string) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported KDF: %s", cryptoJSON.KDF)
 }
 
-// TODO: can we do without this when unmarshalling dynamic JSON?
-// why do integers in KDF params end up as float64 and not int after
-// unmarshal?
 func ensureInt(x interface{}) int {
 	res, ok := x.(int)
 	if !ok {

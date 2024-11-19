@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dominant-strategies/go-quai/common"
+	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/google/uuid"
 	"golang.org/x/term"
 )
@@ -28,29 +29,21 @@ var (
 // KeyStoreScheme is the protocol scheme prefixing account and wallet URLs.
 const KeyStoreScheme = "keystore"
 
-// KeyManager 管理私钥的创建、存储和加载
+// KeyManager manages the creation, storage and loading of private keys
 type KeyManager struct {
 	storage keyStore // Storage backend, might be cleartext or encrypted
 	keyDir  string
 }
 
-type Key struct {
-	Id uuid.UUID // Version 4 "random" for unique id not derived from key data
-	// to simplify lookups we also store the address
-	Address common.Address
-	// we only store privkey as pubkey/address can be derived from it
-	// privkey in this struct is always in plaintext
-	PrivateKey *ecdsa.PrivateKey
-}
-
-// NewKeyManager 创建一个新的KeyManager实例
+// NewKeyManager creates a new KeyManager instance
 func NewKeyManager(keyDir string) (*KeyManager, error) {
-	// 确保目录存在
+	// Ensure directory exists
 	if err := os.MkdirAll(keyDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create keystore directory: %v", err)
 	}
 
-	// 创建keystore实例，使用标准的scrypt参数
+	// TODO: Check encryption parameters here
+	// Create keystore instance with standard scrypt parameters
 	ks := NewKeyStore(keyDir, StandardScryptN, StandardScryptP)
 
 	return &KeyManager{
@@ -59,15 +52,15 @@ func NewKeyManager(keyDir string) (*KeyManager, error) {
 	}, nil
 }
 
-// CreateNewKey 创建新的私钥并加密存储
+// CreateNewKey creates a new private key and stores it encrypted
 func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, error) {
-	// 读取密码
+	// Read password
 	password, err := readPassword("Enter password for new key: ")
 	if err != nil {
 		return common.Address{}, err
 	}
 
-	// 确认密码
+	// Confirm password
 	confirmPass, err := readPassword("Confirm password: ")
 	if err != nil {
 		return common.Address{}, err
@@ -78,7 +71,7 @@ func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, err
 	}
 	fmt.Println("Password match successful!")
 
-	// 创建新账户
+	// Create new account
 	account, err := k.NewAccount(password, location)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to create new account: %v", err)
@@ -87,21 +80,21 @@ func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, err
 	return account.Address, nil
 }
 
-// LoadFile 从keystore文件加载私钥
+// LoadFile loads a private key from a keystore file
 func (k *KeyManager) LoadFile(keyFile string) (*Key, error) {
-	// 读取密码
-	password, err := readPassword("Enter password to decrypt key: ")
-	if err != nil {
-		return nil, err
-	}
-
-	// 读取文件内容
+	// Read key file content
 	keyjson, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read key file: %v", err)
 	}
 
-	// 解密key
+	// Read password
+	password, err := readPassword("Enter password to decrypt key: ")
+	if err != nil {
+		return nil, err
+	}
+
+	// Decrypt key
 	key, err := DecryptKey(keyjson, password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt key: %v", err)
@@ -110,9 +103,9 @@ func (k *KeyManager) LoadFile(keyFile string) (*Key, error) {
 	return key, nil
 }
 
-// LoadKey 从keystore加载私钥
+// LoadKey loads a private key from the keystore
 func (k *KeyManager) LoadKey(address common.Address) (*Key, error) {
-	// 读取密码
+	// Read password
 	password, err := readPassword("Enter password to decrypt key: ")
 	if err != nil {
 		return nil, err
@@ -135,7 +128,7 @@ func (k *KeyManager) LoadKey(address common.Address) (*Key, error) {
 		return nil, fmt.Errorf("key file not found for address %x", address)
 	}
 
-	// 获取解密后的key
+	// Get decrypted key
 	key, err := k.GetKey(address, keyFile, password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt key: %v", err)
@@ -144,13 +137,13 @@ func (k *KeyManager) LoadKey(address common.Address) (*Key, error) {
 	return key, nil
 }
 
-// readPassword 安全地读取密码
+// readPassword securely reads a password
 func readPassword(prompt string) (string, error) {
 	fmt.Print(prompt)
 	bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println() // 换行
+	fmt.Println() // New line
 	if err != nil {
-		return "", fmt.Errorf("读取密码失败: %v", err)
+		return "", fmt.Errorf("failed to read password: %v", err)
 	}
 	return string(bytePassword), nil
 }
@@ -228,4 +221,74 @@ func (err *AuthNeededError) Error() string {
 // one time PIN code displayed by some hardware device.
 type AuthNeededError struct {
 	Needed string // Extra authentication the user needs to provide
+}
+
+// ImportPrivateKey imports a private key from a hex string and stores it encrypted
+func (k *KeyManager) ImportPrivateKey() (common.Address, error) {
+	// Read private key with hidden input
+	privateKeyStr, err := readPassword("Enter private key (hex format): ")
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	// Clean the private key string (remove 0x prefix if present)
+	privateKeyStr = strings.TrimPrefix(strings.TrimSpace(privateKeyStr), "0x")
+
+	// Convert hex string to ECDSA private key
+	privateKey, err := crypto.HexToECDSA(privateKeyStr)
+	if err != nil {
+		return common.Address{}, fmt.Errorf("invalid private key: %v", err)
+	}
+
+	// Generate random UUID for the key
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return common.Address{}, fmt.Errorf("failed to generate UUID: %v", err)
+	}
+
+	// Create the Key struct
+	key := &Key{
+		Id:         id,
+		Address:    PubkeyToAddressWithoutLocation(privateKey.PublicKey),
+		PrivateKey: privateKey,
+	}
+
+	// Read password for encryption
+	password, err := readPassword("Enter password to encrypt key: ")
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	// Confirm password
+	confirmPass, err := readPassword("Confirm password: ")
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	if password != confirmPass {
+		return common.Address{}, fmt.Errorf("passwords do not match")
+	}
+
+	// Create account URL
+	account := Account{
+		Address: key.Address,
+		URL:     URL{Scheme: KeyStoreScheme, Path: k.storage.JoinPath(keyFileName(key.Address))},
+	}
+
+	// Store the key
+	if err := k.storage.StoreKey(account.URL.Path, key, password); err != nil {
+		return common.Address{}, fmt.Errorf("failed to store key: %v", err)
+	}
+
+	fmt.Printf("\nSuccessfully imported and encrypted key for address: %x\n", key.Address)
+	return key.Address, nil
+}
+
+func PubkeyToAddressWithoutLocation(p ecdsa.PublicKey) common.Address {
+	pubBytes := crypto.FromECDSAPub(&p)
+	addressBytes := crypto.Keccak256(pubBytes[1:])[12:]
+	lowerNib := addressBytes[0] & 0x0F        // Lower 4 bits
+	upperNib := (addressBytes[0] & 0xF0) >> 4 // Upper 4 bits, shifted right
+	location := common.Location{upperNib, lowerNib}
+	return crypto.PubkeyToAddress(p, location)
 }

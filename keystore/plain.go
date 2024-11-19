@@ -13,6 +13,12 @@ type keyStorePlain struct {
 	keysDirPath string
 }
 
+// NewKeyStorePlain creates a new key store.
+func NewKeyStorePlain(keysDirPath string) *keyStorePlain {
+	return &keyStorePlain{keysDirPath: keysDirPath}
+}
+
+// GetKey loads a key from the keystore.
 func (ks keyStorePlain) GetKey(addr common.Address, filename, auth string) (*Key, error) {
 	fd, err := os.Open(filename)
 	if err != nil {

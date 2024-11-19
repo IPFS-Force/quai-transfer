@@ -25,3 +25,8 @@ go.work.sum
 .env
 
 .idea
+
+.vscode/launch.json
+.keystore
+
+app

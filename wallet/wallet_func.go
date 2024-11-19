@@ -1,6 +1,6 @@
 package wallet
 
-// 看看是否需要，且用在什么场合？
+// Check if needed and in what scenarios?
 //type WalletFunc interface {
 //	GetNowBlockNum() (uint64, error)
 //	GetTransaction(num uint64) ([]types.Transaction, uint64, error)
@@ -15,6 +15,5 @@ package wallet
 //	Worker   WalletFunc
 //	config   config.Config
 //	Protocol string
-//	localDB  dal.SqliteDB // 可以把接口都封装起来只暴露一个interface
-//
+//	localDB  dal.SqliteDB // Can encapsulate all interfaces and only expose one interface
 //}

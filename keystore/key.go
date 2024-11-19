@@ -18,6 +18,15 @@ const (
 	version = 3
 )
 
+type Key struct {
+	Id uuid.UUID // Version 4 "random" for unique id not derived from key data
+	// to simplify lookups we also store the address
+	Address common.Address
+	// we only store privkey as pubkey/address can be derived from it
+	// privkey in this struct is always in plaintext
+	PrivateKey *ecdsa.PrivateKey
+}
+
 // Account represents an Ethereum account located at a specific location defined
 // by the optional URL field.
 type Account struct {
@@ -30,15 +39,6 @@ type Account struct {
 type URL struct {
 	Scheme string // Protocol scheme to identify a capable account backend
 	Path   string // Path for the backend to identify a unique entity
-}
-
-type keyStore interface {
-	// GetKey Loads and decrypts the key from disk.
-	GetKey(addr common.Address, filename string, auth string) (*Key, error)
-	// StoreKey Writes and encrypts the key.
-	StoreKey(filename string, k *Key, auth string) error
-	// JoinPath Joins filename with the key directory unless it is already absolute.
-	JoinPath(filename string) string
 }
 
 type cipherparamsJSON struct {
@@ -98,6 +98,8 @@ func writeTemporaryKeyFile(file string, content []byte) (string, error) {
 	return f.Name(), nil
 }
 
+// storeNewKey creates a new key and stores it in the keystore.
+// todo Quai and Qi have different address formats
 func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Location) (*Key, Account, error) {
 	key, err := newKey(rand, location)
 	if err != nil {
@@ -111,6 +113,7 @@ func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Locat
 		if int(region) == location.Region() && int(zone) == location.Zone() {
 			break
 		}
+		// 如果上面没有生成符合location的地址，则重试
 		key, err = newKey(rand, location)
 		if err != nil {
 			return nil, Account{}, err
