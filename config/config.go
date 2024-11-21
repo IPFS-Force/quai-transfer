@@ -23,11 +23,12 @@ type NetworkConfig struct {
 type Config struct {
 	InterDSN string                           `mapstructure:"dsn"`
 	Network  wtypes.Network                   `mapstructure:"network"`
-	Rpc      string                           `mapstructure:"rpc"`
+	RPC      string                           `mapstructure:"rpc"`
 	Protocol string                           `mapstructure:"protocol"`
 	Location common.Location                  `mapstructure:"location"`
 	KeyFile  string                           `mapstructure:"key_file"`
 	Networks map[wtypes.Network]NetworkConfig `mapstructure:"networks"`
+	Debug    bool                             `mapstructure:"debug"`
 }
 
 // LoadConfig loads configuration from config file
@@ -69,7 +70,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	config := &Config{
 		InterDSN: rawConfig.InterDSN,
 		Network:  wtypes.Network(strings.ToLower(rawConfig.Network)),
-		Rpc:      rawConfig.Rpc,
+		RPC:      rawConfig.Rpc,
 		Protocol: rawConfig.Protocol,
 		Location: stringToLocation(rawConfig.Location),
 		KeyFile:  rawConfig.KeyFile,

@@ -5,6 +5,7 @@ rpc = "http://localhost:8545"
 protocol = "quai"
 location = "0-0"  # Default location
 key_file = "./keystore/key.json"
+debug = false
 
 # Network configurations for different Quai networks
 [networks]

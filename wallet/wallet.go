@@ -108,15 +108,10 @@ func (w *Wallet) GetChainID(ctx context.Context) (*big.Int, error) {
 }
 
 // initClient initializes the wallet's client connection
-func (w *Wallet) initClient(network wtypes.Network) error {
-	cfg, err := config.LoadConfig("")
-	if err != nil {
-		return fmt.Errorf("failed to load config: %v", err)
-	}
-
-	netConfig, ok := cfg.Networks[network]
+func (w *Wallet) initClient() error {
+	netConfig, ok := w.config.Networks[w.config.Network]
 	if !ok {
-		return fmt.Errorf("unsupported network: %s", network)
+		return fmt.Errorf("unsupported network: %s", w.config.Network)
 	}
 
 	// Get location from wallet's address
@@ -125,7 +120,7 @@ func (w *Wallet) initClient(network wtypes.Network) error {
 	// Get RPC URL for the location
 	rpcURL, ok := netConfig.RPCURLs[locationToString(location)]
 	if !ok {
-		return fmt.Errorf("unsupported location %v for network %s", location, network)
+		return fmt.Errorf("unsupported location %v for network %s", location, w.config.Network)
 	}
 
 	client, err := ethclient.Dial(rpcURL)
@@ -137,8 +132,8 @@ func (w *Wallet) initClient(network wtypes.Network) error {
 		client:     client,
 		chainID:    &ChainIDMapping{Expected: netConfig.ChainID},
 		location:   location,
-		network:    network,
-		config:     cfg,
+		network:    w.config.Network,
+		config:     w.config,
 		privateKey: w.privateKey,
 		address:    w.address,
 		txDAL:      w.txDAL,
@@ -160,10 +155,11 @@ func NewWalletFromKey(key *keystore.Key, cfg *config.Config) (*Wallet, error) {
 		privateKey: key.PrivateKey,
 		txDAL:      dal.NewTransactionDAL(dal.InterDB),
 		address:    key.Address,
+		config:     cfg,
 	}
 
 	// Initialize client and other fields
-	if err := wallet.initClient(cfg.Network); err != nil {
+	if err := wallet.initClient(); err != nil {
 		return nil, err
 	}
 
@@ -187,13 +183,14 @@ func NewWalletFromPrivateKeyString(privKeyHex string, cfg *config.Config) (*Wall
 	wallet := &Wallet{
 		privateKey: privateKey,
 		txDAL:      dal.NewTransactionDAL(dal.InterDB),
+		config:     cfg,
 	}
 
 	// Calculate the address first
 	wallet.address = wallet.calculateAddress()
 
 	// Initialize client and other fields
-	if err := wallet.initClient(cfg.Network); err != nil {
+	if err := wallet.initClient(); err != nil {
 		return nil, err
 	}
 
@@ -384,6 +381,9 @@ func (w *Wallet) WaitForReceipt(ctx context.Context, txHash common.Hash) (*types
 
 // printTxDetails prints transaction details with optional signature info
 func (w *Wallet) printTxDetails(tx *types.Transaction) {
+	if !w.config.Debug {
+		return
+	}
 	// Check if transaction is signed by looking at signature values
 	V, R, S := tx.GetEcdsaSignatureValues()
 	isSigned := R.Sign() != 0 && S.Sign() != 0
@@ -419,6 +419,9 @@ func (w *Wallet) printTxDetails(tx *types.Transaction) {
 
 // printReceiptDetails prints transaction receipt details
 func (w *Wallet) printReceiptDetails(receipt *types.Receipt) {
+	if !w.config.Debug {
+		return
+	}
 	fmt.Printf("\nTransaction Receipt Details:\n")
 	fmt.Printf("  Type: %v\n", receipt.Type)
 	if len(receipt.PostState) > 0 {
