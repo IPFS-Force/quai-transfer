@@ -44,21 +44,3 @@ func IsInQiLedgerScope(address string) bool {
 	// The first bit of the second byte is set if the address is in the Qi ledger
 	return address[1] > 127
 }
-
-// ToWei converts an Ethereum value in val (as a string) to wei (as *big.Int)
-func ToWei(v string) (*big.Int, bool) {
-	value, ok := new(big.Float).SetString(v)
-	if !ok {
-		return nil, false // Could not parse ETH value
-	}
-
-	multiplier := new(big.Float).SetInt(big.NewInt(1e18))
-
-	// Multiply the value by the conversion factor to get wei
-	value.Mul(value, multiplier)
-
-	wei := new(big.Int)
-	value.Int(wei) // Extracts the integer part of the big.Float
-
-	return wei, true
-}

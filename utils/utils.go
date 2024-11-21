@@ -4,11 +4,13 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
-	"quai-transfer/types"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"quai-transfer/types"
 
 	"github.com/fatih/color"
 	"github.com/shopspring/decimal"
@@ -103,4 +105,38 @@ func runFuncPos() string {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", file, line)
+}
+
+func ToQuai(ivalue interface{}) decimal.Decimal {
+	value := new(big.Int)
+	switch v := ivalue.(type) {
+	case string:
+		value.SetString(v, 10)
+	case *big.Int:
+		value = v
+	}
+
+	mul := decimal.NewFromFloat(float64(10)).Pow(decimal.NewFromFloat(float64(18)))
+	num, _ := decimal.NewFromString(value.String())
+	result := num.Div(mul)
+
+	return result
+}
+
+// ToWei converts an Ethereum value in val (as a string) to wei (as *big.Int)
+func ToWei(v string) (*big.Int, bool) {
+	value, ok := new(big.Float).SetString(v)
+	if !ok {
+		return nil, false // Could not parse ETH value
+	}
+
+	multiplier := new(big.Float).SetInt(big.NewInt(1e18))
+
+	// Multiply the value by the conversion factor to get wei
+	value.Mul(value, multiplier)
+
+	wei := new(big.Int)
+	value.Int(wei) // Extracts the integer part of the big.Float
+
+	return wei, true
 }

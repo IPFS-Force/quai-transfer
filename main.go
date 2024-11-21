@@ -104,7 +104,7 @@ func main() {
 //		log.Fatal(err)
 //	}
 //
-//	// 创建新私钥 (假设我们要创建ID范围在0-255之间的私钥)
+//	// 创建新私钥
 //	address, err := km.CreateNewKey(common.Location{0, 0})
 //	if err != nil {
 //		log.Fatal(err)

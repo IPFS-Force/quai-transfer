@@ -82,7 +82,7 @@ func runTransfer(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get wallet balance: %v", err)
 	}
-	fmt.Printf("Wallet balance: %s wei\n", balance.String())
+	fmt.Printf("Wallet balance: %s Quai\n", utils.ToQuai(balance.String()))
 
 	// Parse CSV file
 	transferEntries, err := utils.ParseTransferCSV(csvFile)
@@ -118,7 +118,7 @@ func runTransfer(cmd *cobra.Command, args []string) error {
 			failedCnt++
 			continue
 		}
-		log.Printf("\n✅ TRANSFER SUCCESSFUL ✅\nMiner Account: %s\nEntry ID: %d\n", entry.MinerAccount, entry.ID)
+		log.Printf("\n✅ TRANSFER SUCCESSFUL ✅\nMiner Account: %s\nEntry ID: %d\nTransferred: %s Quai\n", entry.MinerAccount, entry.ID, utils.ToQuai(entry.Value.String()))
 		successCnt++
 	}
 	log.Printf("Transfer completed, total: %d, success: %d, failed: %d, processed: %d, invalid address: %d", len(transferEntries), successCnt, failedCnt, processedCnt, invalidCnt)

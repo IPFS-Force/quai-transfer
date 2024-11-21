@@ -53,10 +53,9 @@ func (d *TransactionDAL) IsTransactionExist(ctx context.Context, id int32) (bool
 func (d *TransactionDAL) GetTransactionByID(ctx context.Context, id int32) (*models.Transaction, error) {
 	var tx models.Transaction
 	result := d.db.WithContext(ctx).
-		Table(tx.TableName()).
 		Select("tx::text", "entry::text", "status").
 		Where("id = ?", id).
-		Scan(&tx)
+		First(&tx)
 
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {

@@ -16,6 +16,7 @@ import (
 	"quai-transfer/dal/models"
 	"quai-transfer/keystore"
 	wtypes "quai-transfer/types"
+	"quai-transfer/utils"
 
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"google.golang.org/protobuf/proto"
@@ -33,8 +34,9 @@ import (
 var _ WalletFunc = (*Wallet)(nil)
 
 const (
-	GasLimit = 420000
-	MinerTip = 1000
+	GasLimit          = 420000
+	MinerTip          = 1000
+	ReceiptMaxRetries = 30 // Wait for about 5 minutes (30 * 10 seconds)
 )
 
 // ChainIDMapping holds the expected and actual chain IDs
@@ -65,15 +67,18 @@ func (w *Wallet) GetBalance(ctx context.Context) (*big.Int, error) {
 }
 
 func (w *Wallet) BroadcastTransaction(ctx context.Context, tx *types.Transaction) error {
-	protoTx, err := tx.ProtoEncode()
-	if err != nil {
-		return err
+	if w.config.Debug {
+		protoTx, err := tx.ProtoEncode()
+		if err != nil {
+			return err
+		}
+		data, err := proto.Marshal(protoTx)
+		if err != nil {
+			return err
+		}
+		log.Println("transaction raw data:", hexutil.Encode(data))
 	}
-	data, err := proto.Marshal(protoTx)
-	if err != nil {
-		return err
-	}
-	log.Println("transaction raw data:", hexutil.Encode(data))
+
 	return w.client.SendTransaction(ctx, tx)
 }
 
@@ -356,7 +361,6 @@ func (w *Wallet) SendQi(ctx context.Context, to common.Address, amount uint8) (*
 // WaitForReceipt waits for transaction receipt with timeout
 func (w *Wallet) WaitForReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
 	retry := 0
-	maxRetries := 30 // Wait for about 5 minutes (30 * 10 seconds)
 
 	for {
 		receipt, err := w.GetTransactionReceipt(ctx, txHash)
@@ -365,8 +369,8 @@ func (w *Wallet) WaitForReceipt(ctx context.Context, txHash common.Hash) (*types
 		}
 
 		retry++
-		if retry >= maxRetries {
-			return nil, fmt.Errorf("timeout waiting for transaction receipt after %d attempts", maxRetries)
+		if retry >= ReceiptMaxRetries {
+			return nil, fmt.Errorf("timeout waiting for transaction receipt after %d attempts", ReceiptMaxRetries)
 		}
 
 		// Wait 10 seconds before retrying
@@ -676,8 +680,9 @@ func CheckBalance(ctx context.Context, w *Wallet, transferEntries []*wtypes.Tran
 
 	if balanceDecimal.LessThan(totalRequired) {
 		return fmt.Errorf("insufficient balance for transfers: have %s, need %s",
-			balanceDecimal.String(), totalRequired.String())
+			utils.ToQuai(balanceDecimal.String()), utils.ToQuai(totalRequired.String()))
 	}
+	log.Printf("balance check passed, have %s, need %s", utils.ToQuai(balanceDecimal.String()), utils.ToQuai(totalRequired.String()))
 	return nil
 }
 

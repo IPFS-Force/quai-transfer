@@ -13,11 +13,6 @@ var importKeyCmd = &cobra.Command{
 	RunE:  runImportKey,
 }
 
-func init() {
-	// Add importKeyCmd as a subcommand to rootCmd
-	rootCmd.AddCommand(importKeyCmd)
-}
-
 func runImportKey(cmd *cobra.Command, args []string) error {
 	// Initialize keystore
 	ks, err := keystore.NewKeyManager(keyDir)
