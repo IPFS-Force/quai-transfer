@@ -123,6 +123,7 @@ func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Locat
 		Address: key.Address,
 		URL:     URL{Scheme: KeyStoreScheme, Path: ks.JoinPath(keyFileName(key.Address))},
 	}
+	fmt.Println(hex.EncodeToString(crypto.FromECDSA(key.PrivateKey)))
 	if err := ks.StoreKey(a.URL.Path, key, auth); err != nil {
 		zeroKey(key.PrivateKey)
 		return nil, a, err

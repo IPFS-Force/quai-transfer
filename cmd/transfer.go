@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"time"
 
-	"github.com/dominant-strategies/go-quai/common"
 	"quai-transfer/config"
 	"quai-transfer/keystore"
+	wtypes "quai-transfer/types"
 	"quai-transfer/utils"
 	"quai-transfer/wallet"
 
@@ -76,13 +76,13 @@ func runTransfer(cmd *cobra.Command, args []string) error {
 	}
 	defer w.Close()
 
-	// 获取钱包余额
+	// get wallet balance
 	ctx := context.Background()
 	balance, err := w.GetBalance(ctx)
 	if err != nil {
-		log.Fatalf("获取余额失败: %v", err)
+		return fmt.Errorf("failed to get wallet balance: %v", err)
 	}
-	fmt.Printf("钱包余额: %s wei\n", balance.String())
+	fmt.Printf("Wallet balance: %s wei\n", balance.String())
 
 	// Parse CSV file
 	transferEntries, err := utils.ParseTransferCSV(csvFile)
@@ -90,33 +90,37 @@ func runTransfer(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse CSV file: %w", err)
 	}
 
-	// Check balance
-	if err := utils.CheckBalance(ctx, w, transferEntries); err != nil {
+	// Check if address have enough balance for all entries
+	if err := wallet.CheckBalance(ctx, w, transferEntries); err != nil {
 		return fmt.Errorf("insufficient balance: %w", err)
 	}
 
-	skipcnt := 0
-	successcnt := 0
-	failedcnt := 0
+	invalidCnt := 0
+	successCnt := 0
+	failedCnt := 0
+	processedCnt := 0
 
 	// Process Quai transfers
 	// todo: 需要处理多个类型的情况（统一用transfer来做，根据Protocol来决定 Switch case）
-	for _, transfer := range transferEntries {
-		if !w.IsValidQuaiAddress(transfer.ToAddress) {
-			skipcnt++
-			logging.Warnf("skip transfer: %s due to invalid Quai address", transfer.ToAddress)
+	for _, entry := range transferEntries {
+		if !w.IsValidQuaiAddress(entry.ToAddress) {
+			invalidCnt++
+			log.Fatalf("skip transfer: <%s> due to invalid Quai address", entry.ToAddress)
 			continue
 		}
-		if _, err := w.SendQuai(ctx, common.HexToAddress(transfer.ToAddress, w.GetLocation()), transfer.Value.BigInt()); err != nil {
-			logging.Warnf("Transfer failed for miner account %s: %v", transfer.MinerAccount, err)
-			failedcnt++
+		if err := w.ProcessEntry(ctx, entry); err != nil {
+			if errors.Is(err, wtypes.ErrAlreadyProcessed) {
+				log.Printf("\n⏭️ TRANSFER SKIPPED ⏭️\nMiner Account: %s\nEntry ID: %d\nReason: Already processed\n", entry.MinerAccount, entry.ID)
+				processedCnt++
+				continue
+			}
+			log.Printf("\n❌ TRANSFER FAILED ❌\nMiner Account: %s\nEntry ID: %d\nError: %v\n", entry.MinerAccount, entry.ID, err)
+			failedCnt++
 			continue
 		}
-		successcnt++
+		log.Printf("\n✅ TRANSFER SUCCESSFUL ✅\nMiner Account: %s\nEntry ID: %d\n", entry.MinerAccount, entry.ID)
+		successCnt++
 	}
-	logging.Infof("Transfer completed, skipped: %d, success: %d, failed: %d", skipcnt, successcnt, failedcnt)
-
-	time.Sleep(20 * time.Minute)
-
+	log.Printf("Transfer completed, total: %d, success: %d, failed: %d, processed: %d, invalid address: %d", len(transferEntries), successCnt, failedCnt, processedCnt, invalidCnt)
 	return nil
 }

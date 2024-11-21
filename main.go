@@ -14,17 +14,16 @@ import (
 // TODO
 // TODO	 1. 把sendQuai进行并发执行
 // TODO 2. 把receipt 用异步的方式去等待，并把正确的结果保存在（中间回传）数据库，失败的交易也保存下来。进行计数，并把所有失败交易的接受地址和失败原因保存下来。
-// TODO 3. 读取CSV文件，并进行并发执行
+
 // TODO 4. 把调试用标记来打开或关掉
 
 // TODO 6. 命令行工具可以多次重复执行，但是已经发送的交易不会再去发。注意不要多发了
 // TODO 7. gas price及minertip 设置为 最优值，省钱
 // TODO 8. 计算出手续费的真实费用
 
-// TODO 10. 除了将判断address的正则是否是合法的地址，还要判断是否是quai的地址，另外后续注意region用于跨域 re := regexp.MustCompile("^0x[0-9a-fA-F]{40}$") .   fmt.Printf("is valid: %v\n", re.MatchString("0x323b5d4c32345ced77393b3530b1eed0f346429d")) // is valid: true
-// 测试现在是否Quai安全性没有这部分
-
 // TODO 12. 检查wallet指定的Protocol是否和转账地址的Protocol一致
+// TODO 13. 查看SDK中转账有什么必要的字段，为什么gas price 浏览器中产生不了。且内部错误
+// todo 14. 检查事务一致性（先插入再执行，保证不会多次转账。结果的话可以多次确认的）
 
 func main() {
 	cfg, err := config.LoadConfig("")
@@ -34,7 +33,7 @@ func main() {
 	fmt.Println(cfg)
 	utils.Json(cfg)
 	config := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logger.Silent),
 	}
 	db, err := gorm.Open(postgres.Open(cfg.InterDSN), config)
 	if err != nil {

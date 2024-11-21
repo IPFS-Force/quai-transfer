@@ -3,9 +3,12 @@ package wallet
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"regexp"
+	"strings"
 	"time"
 
 	"quai-transfer/config"
@@ -14,6 +17,9 @@ import (
 	"quai-transfer/keystore"
 	wtypes "quai-transfer/types"
 
+	"github.com/dominant-strategies/go-quai/common/hexutil"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/dominant-strategies/go-quai/common"
@@ -21,6 +27,14 @@ import (
 	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/dominant-strategies/go-quai/quaiclient/ethclient"
 	"github.com/shopspring/decimal"
+)
+
+// Ensure Wallet implements WalletFunc interface
+var _ WalletFunc = (*Wallet)(nil)
+
+const (
+	GasLimit = 420000
+	MinerTip = 1000
 )
 
 // ChainIDMapping holds the expected and actual chain IDs
@@ -39,6 +53,58 @@ type Wallet struct {
 	address    common.Address
 	txDAL      *dal.TransactionDAL
 	config     *config.Config
+}
+
+func (w *Wallet) GetLocation() common.Location {
+	return w.location
+}
+
+func (w *Wallet) GetBalance(ctx context.Context) (*big.Int, error) {
+	address := w.GetAddress()
+	return w.client.BalanceAt(ctx, address.MixedcaseAddress(), nil)
+}
+
+func (w *Wallet) BroadcastTransaction(ctx context.Context, tx *types.Transaction) error {
+	protoTx, err := tx.ProtoEncode()
+	if err != nil {
+		return err
+	}
+	data, err := proto.Marshal(protoTx)
+	if err != nil {
+		return err
+	}
+	log.Println("transaction raw data:", hexutil.Encode(data))
+	return w.client.SendTransaction(ctx, tx)
+}
+
+func (w *Wallet) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
+	return w.client.SuggestGasPrice(ctx)
+}
+
+func (w *Wallet) GetNonce(ctx context.Context) (uint64, error) {
+	return w.client.PendingNonceAt(ctx, w.GetAddress().MixedcaseAddress())
+}
+
+func (w *Wallet) GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	return w.client.TransactionReceipt(ctx, txHash)
+}
+
+func (w *Wallet) Close() {
+	w.client.Close()
+}
+
+func (w *Wallet) GetAddress() common.Address {
+	return w.address
+}
+
+// GetChainID returns the current chain ID from the client
+func (w *Wallet) GetChainID(ctx context.Context) (*big.Int, error) {
+	if w.chainID.Actual == nil {
+		if err := w.verifyChainID(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return w.chainID.Actual, nil
 }
 
 // initClient initializes the wallet's client connection
@@ -67,13 +133,16 @@ func (w *Wallet) initClient(network wtypes.Network) error {
 		return fmt.Errorf("failed to connect to node: %v", err)
 	}
 
-	w.client = client
-	w.chainID = &ChainIDMapping{
-		Expected: netConfig.ChainID,
+	*w = Wallet{
+		client:     client,
+		chainID:    &ChainIDMapping{Expected: netConfig.ChainID},
+		location:   location,
+		network:    network,
+		config:     cfg,
+		privateKey: w.privateKey,
+		address:    w.address,
+		txDAL:      w.txDAL,
 	}
-	w.location = location
-	w.network = network
-	w.config = cfg
 
 	return nil
 }
@@ -85,7 +154,6 @@ func (w *Wallet) calculateLocation() common.Location {
 
 // NewWalletFromKey creates a new wallet instance from a Key
 func NewWalletFromKey(key *keystore.Key, cfg *config.Config) (*Wallet, error) {
-	// Initialize database
 	dal.DBInit(cfg)
 
 	wallet := &Wallet{
@@ -94,12 +162,11 @@ func NewWalletFromKey(key *keystore.Key, cfg *config.Config) (*Wallet, error) {
 		address:    key.Address,
 	}
 
-	// Initialize client and other fields - no longer passing location
+	// Initialize client and other fields
 	if err := wallet.initClient(cfg.Network); err != nil {
 		return nil, err
 	}
 
-	// Verify chain ID
 	if err := wallet.verifyChainID(context.Background()); err != nil {
 		wallet.Close()
 		return nil, err
@@ -110,7 +177,6 @@ func NewWalletFromKey(key *keystore.Key, cfg *config.Config) (*Wallet, error) {
 
 // NewWalletFromPrivateKeyString creates a new wallet instance from a private key string
 func NewWalletFromPrivateKeyString(privKeyHex string, cfg *config.Config) (*Wallet, error) {
-	// Initialize database
 	dal.DBInit(cfg)
 
 	privateKey, err := crypto.HexToECDSA(privKeyHex)
@@ -126,12 +192,11 @@ func NewWalletFromPrivateKeyString(privKeyHex string, cfg *config.Config) (*Wall
 	// Calculate the address first
 	wallet.address = wallet.calculateAddress()
 
-	// Initialize client and other fields - no longer passing location
+	// Initialize client and other fields
 	if err := wallet.initClient(cfg.Network); err != nil {
 		return nil, err
 	}
 
-	// Verify chain ID
 	if err := wallet.verifyChainID(context.Background()); err != nil {
 		wallet.Close()
 		return nil, err
@@ -140,51 +205,17 @@ func NewWalletFromPrivateKeyString(privKeyHex string, cfg *config.Config) (*Wall
 	return wallet, nil
 }
 
-// GetAddress returns the wallet's address
-func (w *Wallet) GetAddress() common.Address {
-	return w.address
-}
-
-// GetChainID returns the current chain ID from the client
-func (w *Wallet) GetChainID(ctx context.Context) (*big.Int, error) {
-	if w.chainID.Actual == nil {
-		if err := w.verifyChainID(ctx); err != nil {
-			return nil, err
-		}
-	}
-	return w.chainID.Actual, nil
-}
-
-// GetLocation returns the wallet's location
-func (w *Wallet) GetLocation() common.Location {
-	return w.location
-}
-
-// GetBalance returns the wallet's balance
-func (w *Wallet) GetBalance(ctx context.Context) (*big.Int, error) {
-	address := w.GetAddress()
-	return w.client.BalanceAt(ctx, address.MixedcaseAddress(), nil)
-}
-
-// SuggestGasPrice returns the suggested gas price
-func (w *Wallet) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
-	return w.client.SuggestGasPrice(ctx)
-}
-
 // SendQuai sends a Quai transaction asynchronously
 func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.Int) (*types.Transaction, error) {
 	from := w.GetAddress()
-	fromMixedCase := from.MixedcaseAddress()
 
-	// Get the nonce
-	nonce, err := w.client.PendingNonceAt(ctx, fromMixedCase)
+	nonce, err := w.GetNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get nonce: %v", err)
 	}
 	fmt.Printf("Nonce: %d\n", nonce)
 
-	// Get gas price
-	gasPrice, err := w.client.SuggestGasPrice(ctx)
+	gasPrice, err := w.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %v", err)
 	}
@@ -194,8 +225,8 @@ func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.In
 		ChainID:    w.chainID.Actual,
 		Nonce:      nonce,
 		GasPrice:   gasPrice,
-		MinerTip:   big.NewInt(1),
-		Gas:        42000,
+		MinerTip:   big.NewInt(MinerTip),
+		Gas:        GasLimit,
 		To:         &to,
 		Value:      amount,
 		Data:       nil,
@@ -211,7 +242,6 @@ func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.In
 
 	w.printTxDetails(signedTx)
 
-	// Create initial transaction record
 	txRecord := &models.Transaction{
 		Payer:     from.Hex(),
 		ToAddress: to.Hex(),
@@ -220,7 +250,7 @@ func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.In
 		Value:     decimal.NewFromBigInt(amount, 0),
 		GasLimit:  decimal.NewFromInt(int64(signedTx.Gas())),
 		GasPrice:  decimal.NewFromBigInt(signedTx.GasPrice(), 0),
-		Status:    0, // pending
+		Status:    models.Generated, // pending
 		CreatedAt: time.Now(),
 	}
 
@@ -229,22 +259,21 @@ func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.In
 	}
 	fmt.Printf("Created transaction record: %d\n", txRecord.ID)
 
-	// Send the transaction
-	if err := w.client.SendTransaction(ctx, signedTx); err != nil {
+	if err := w.BroadcastTransaction(ctx, signedTx); err != nil {
 		return nil, fmt.Errorf("failed to send transaction: %v", err)
 	}
-	fmt.Printf("Sent transaction: %s\n", signedTx.Hash().Hex())
+	fmt.Printf("transaction: %s has been broadcasted\n", signedTx.Hash().Hex())
 
 	// Start receipt monitoring
-	if err := w.monitorTransaction(context.Background(), signedTx); err != nil {
+	if err := w.MonitorAndConfirmTransaction(context.Background(), signedTx); err != nil {
 		return nil, err
 	}
 
 	return signedTx, nil
 }
 
-// monitorTransaction monitors the transaction and updates the database when confirmed
-func (w *Wallet) monitorTransaction(ctx context.Context, tx *types.Transaction) (err error) {
+// MonitorAndConfirmTransaction monitors the transaction and updates the database when confirmed
+func (w *Wallet) MonitorAndConfirmTransaction(ctx context.Context, tx *types.Transaction) (err error) {
 	receipt, err := w.WaitForReceipt(ctx, tx.Hash())
 	if err != nil {
 		// Log error but don't return since this is async
@@ -256,6 +285,7 @@ func (w *Wallet) monitorTransaction(ctx context.Context, tx *types.Transaction) 
 	w.printReceiptDetails(receipt)
 
 	gasUsedAmount := decimal.NewFromInt(int64(receipt.GasUsed)).Mul(decimal.NewFromBigInt(tx.GasPrice(), 0))
+
 	// Update transaction record with confirmation details
 	err = w.txDAL.UpdateTransactionStatus(
 		ctx,
@@ -270,16 +300,40 @@ func (w *Wallet) monitorTransaction(ctx context.Context, tx *types.Transaction) 
 	return nil
 }
 
+func (w *Wallet) CheckTransactionAndConfirm(ctx context.Context, tx *types.Transaction) (err error) {
+	receipt, err := w.GetTransactionReceipt(ctx, tx.Hash())
+	if err != nil {
+		return err
+	}
+
+	// Print receipt details for logging
+	w.printReceiptDetails(receipt)
+
+	gasUsedAmount := decimal.NewFromInt(int64(receipt.GasUsed)).Mul(decimal.NewFromBigInt(tx.GasPrice(), 0))
+
+	// Update transaction record with confirmation details
+	err = w.txDAL.UpdateTransactionStatus(
+		ctx,
+		tx.Hash().Hex(),
+		gasUsedAmount,
+		receipt,
+	)
+	if err != nil {
+		fmt.Printf("Error updating transaction status: %v\n", err)
+		return err
+	}
+	fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
+	return nil
+}
+
 // SendQi sends a Qi transaction
 func (w *Wallet) SendQi(ctx context.Context, to common.Address, amount uint8) (*types.Transaction, error) {
 	// Convert private key to btcec format for Schnorr signing
 	privKeyBytes := crypto.FromECDSA(w.privateKey)
 	btcecPrivKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
 
-	// Create TxOut
 	txOut := types.NewTxOut(amount, to.Bytes(), big.NewInt(0))
 
-	// Create QiTx
 	qiTx := &types.QiTx{
 		ChainID: w.chainID.Actual,
 		TxOut:   types.TxOuts{*txOut},
@@ -293,15 +347,12 @@ func (w *Wallet) SendQi(ctx context.Context, to common.Address, amount uint8) (*
 		return nil, fmt.Errorf("failed to sign transaction: %v", err)
 	}
 
-	// Set the signature
 	qiTx.Signature = sig
 
-	// Send the transaction
-	err = w.client.SendTransaction(ctx, tx)
+	err = w.BroadcastTransaction(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send transaction: %v", err)
 	}
-
 	return tx, nil
 }
 
@@ -311,7 +362,7 @@ func (w *Wallet) WaitForReceipt(ctx context.Context, txHash common.Hash) (*types
 	maxRetries := 30 // Wait for about 5 minutes (30 * 10 seconds)
 
 	for {
-		receipt, err := w.client.TransactionReceipt(ctx, txHash)
+		receipt, err := w.GetTransactionReceipt(ctx, txHash)
 		if err == nil {
 			return receipt, nil
 		}
@@ -329,11 +380,6 @@ func (w *Wallet) WaitForReceipt(ctx context.Context, txHash common.Hash) (*types
 			continue
 		}
 	}
-}
-
-// Close closes the client connection
-func (w *Wallet) Close() {
-	w.client.Close()
 }
 
 // printTxDetails prints transaction details with optional signature info
@@ -416,7 +462,7 @@ func (w *Wallet) printReceiptDetails(receipt *types.Receipt) {
 	}
 }
 
-// getStatusString converts receipt status to a human readable string
+// getStatusString converts receipt status to a human-readable string
 func getStatusString(status uint64) string {
 	switch status {
 	case types.ReceiptStatusSuccessful:
@@ -428,28 +474,7 @@ func getStatusString(status uint64) string {
 	}
 }
 
-// ToWei converts an Ethereum value in  val (as a string) to wei (as *big.Int).
-func ToWei(v string) (*big.Int, bool) {
-	// Create a big.Float from the val string
-	value, ok := new(big.Float).SetString(v)
-	if !ok {
-		return nil, false // Could not parse ETH value
-	}
-
-	// Create a big.Float for the conversion factor (1 ETH = 10^18 wei)
-	multiplier := new(big.Float).SetInt(big.NewInt(1e18))
-
-	// Multiply the  value by the conversion factor to get wei
-	value.Mul(value, multiplier)
-
-	// Convert the big.Float result to a big.Int
-	wei := new(big.Int)
-	value.Int(wei) // Extracts the integer part of the big.Float
-
-	return wei, true
-}
-
-// verifyChainID verifies the chain ID
+// verifyChainID verifies if the chain ID is correct with the expected chain ID
 func (w *Wallet) verifyChainID(ctx context.Context) error {
 	actualChainID, err := w.client.ChainID(ctx)
 	if err != nil {
@@ -461,7 +486,6 @@ func (w *Wallet) verifyChainID(ctx context.Context) error {
 	if w.chainID.Expected.Cmp(actualChainID) != 0 {
 		return fmt.Errorf("chain ID mismatch: expected %v, got %v", w.chainID.Expected, actualChainID)
 	}
-
 	return nil
 }
 
@@ -480,7 +504,7 @@ func locationToString(loc common.Location) string {
 	return fmt.Sprintf("%d-%d", loc.Region(), loc.Zone())
 }
 
-// 校验地址是否合法，且在当前链的范围内
+// IsValidAddress validate address is valid and in current chain scope
 func (w *Wallet) IsValidAddress(address string) bool {
 	re := regexp.MustCompile("^0x[0-9a-fA-F]{40}$")
 	if !re.MatchString(address) {
@@ -490,24 +514,202 @@ func (w *Wallet) IsValidAddress(address string) bool {
 	return common.IsInChainScope(addressBytes, w.location)
 }
 
-// 校验地址是否在Quai ledger范围内
+// IsValidQuaiAddress validate address is valid and in Quai ledger scope
 func (w *Wallet) IsValidQuaiAddress(address string) bool {
 	return w.IsValidAddress(address) && IsInQuaiLedgerScope(address)
 }
 
-// 校验地址是否在Qi ledger范围内
+// IsValidQiAddress validate address is valid and in Qi ledger scope
 func (w *Wallet) IsValidQiAddress(address string) bool {
 	return w.IsValidAddress(address) && IsInQiLedgerScope(address)
 }
 
-// 校验地址是否在Quai ledger范围内
-func IsInQuaiLedgerScope(address string) bool {
-	// The first bit of the second byte is not set if the address is in the Quai ledger
-	return address[1] <= 127
+// ProcessEntry handles a single transfer entry
+func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) error {
+	if !w.IsValidQuaiAddress(entry.ToAddress) {
+		return fmt.Errorf("invalid Quai address: %s", entry.ToAddress)
+	}
+
+	signedTx, storedEntry, status, err := w.GetTransactionByID(ctx, entry.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+
+	// Check if transaction is already confirmed
+	if status == models.Confirmed {
+		return wtypes.ErrAlreadyProcessed
+	}
+
+	if storedEntry != nil && !CompareEntries(entry, storedEntry) {
+		return fmt.Errorf("entry mismatch for ID %d: stored entry differs from provided entry", entry.ID)
+	}
+
+	if signedTx == nil {
+		fmt.Printf("entry %d: transaction not found in database, creating new transaction\n", entry.ID)
+		// Create and store transaction
+		signedTx, err = w.CreateTransaction(ctx, entry)
+		if err != nil {
+			return fmt.Errorf("failed to create transaction: %w", err)
+		}
+	}
+
+	w.printTxDetails(signedTx)
+	txHash := signedTx.Hash().Hex()
+
+	err = w.BroadcastTransaction(ctx, signedTx)
+	if err == nil {
+		fmt.Printf("transaction: %s has been broadcasted\n", txHash)
+		return w.MonitorAndConfirmTransaction(ctx, signedTx)
+	}
+
+	// Handle specific error cases
+	switch {
+	case strings.Contains(err.Error(), "nonce too low"):
+		if err := w.CheckTransactionAndConfirm(ctx, signedTx); err != nil {
+			return fmt.Errorf("failed to check and confirm transaction: %w", err)
+		}
+		return nil
+
+	case strings.Contains(err.Error(), "already known"):
+		log.Printf("transaction: %s already known, skipping", txHash)
+		return w.MonitorAndConfirmTransaction(ctx, signedTx)
+
+	default:
+		return fmt.Errorf("failed to send transaction: %w", err)
+	}
 }
 
-// 校验地址是否在Qi ledger范围内
-func IsInQiLedgerScope(address string) bool {
-	// The first bit of the second byte is set if the address is in the Qi ledger
-	return address[1] > 127
+// CreateTransaction creates a new transaction and stores it in the database
+func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEntry) (*types.Transaction, error) {
+	from := w.GetAddress()
+	to := common.HexToAddress(entry.ToAddress, w.GetLocation())
+
+	nonce, err := w.GetNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nonce: %v", err)
+	}
+	fmt.Printf("Nonce: %d\n", nonce)
+
+	gasPrice, err := w.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get gas price: %v", err)
+	}
+	fmt.Printf("Gas price: %v\n", gasPrice)
+
+	tx := types.NewTx(&types.QuaiTx{
+		ChainID:    w.chainID.Actual,
+		Nonce:      nonce,
+		GasPrice:   gasPrice,
+		MinerTip:   big.NewInt(MinerTip),
+		Gas:        GasLimit,
+		To:         &to,
+		Value:      entry.Value.BigInt(),
+		Data:       nil,
+		AccessList: types.AccessList{},
+	})
+
+	signedTx, err := types.SignTx(tx, types.NewSigner(w.chainID.Actual, w.location), w.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign transaction: %v", err)
+	}
+
+	txJSON, err := json.Marshal(signedTx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize transaction: %v", err)
+	}
+
+	entryJSON, err := json.Marshal(entry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize entry: %v", err)
+	}
+
+	txRecord := &models.Transaction{
+		ID:           entry.ID,
+		MinerAccount: uint(entry.MinerAccountID),
+		Payer:        from.Hex(),
+		ToAddress:    to.Hex(),
+		TxHash:       signedTx.Hash().Hex(),
+		Nonce:        nonce,
+		Value:        entry.Value,
+		GasLimit:     decimal.NewFromInt(int64(signedTx.Gas())),
+		GasPrice:     decimal.NewFromBigInt(signedTx.GasPrice(), 0),
+		AggregateIds: entry.AggregateIds,
+		Status:       models.Generated,
+		CreatedAt:    time.Now(),
+		Tx:           string(txJSON),
+		Entry:        string(entryJSON),
+	}
+
+	if err = w.txDAL.CreateTransaction(ctx, txRecord); err != nil {
+		return nil, fmt.Errorf("failed to create transaction record: %v", err)
+	}
+
+	return signedTx, nil
+}
+
+func CheckBalance(ctx context.Context, w *Wallet, transferEntries []*wtypes.TransferEntry) error {
+	balance, err := w.GetBalance(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get balance: %w", err)
+	}
+	balanceDecimal := decimal.NewFromBigInt(balance, 0)
+
+	totalAmount := decimal.Zero
+	for _, entry := range transferEntries {
+		totalAmount = totalAmount.Add(entry.Value)
+	}
+
+	gasPrice, err := w.SuggestGasPrice(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get gas price: %w", err)
+	}
+
+	// to make sure we have enough balance, we multiply the gas price by 10
+	gasPriceDecimal := decimal.NewFromBigInt(gasPrice, 0).Mul(decimal.NewFromInt(10))
+
+	// Calculate total gas cost for all entries ---- Standard transfer gas limit* estimate gas price * 10 * number of transfers
+	estimatedGas := gasPriceDecimal.Mul(decimal.NewFromInt(GasLimit * int64(len(transferEntries))))
+	totalRequired := totalAmount.Add(estimatedGas)
+
+	if balanceDecimal.LessThan(totalRequired) {
+		return fmt.Errorf("insufficient balance for transfers: have %s, need %s",
+			balanceDecimal.String(), totalRequired.String())
+	}
+	return nil
+}
+
+// GetTransactionByID retrieves transaction details by ID
+func (w *Wallet) GetTransactionByID(ctx context.Context, id int32) (*types.Transaction, *wtypes.TransferEntry, models.TxStatus, error) {
+	txRecord, err := w.txDAL.GetTransactionByID(ctx, id)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to get transaction: %v", err)
+	}
+	if txRecord == nil {
+		return nil, nil, 0, nil // Return nil if no record found
+	}
+	fmt.Println(txRecord)
+
+	var tx types.Transaction
+	if err := json.Unmarshal([]byte(txRecord.Tx), &tx); err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to deserialize transaction: %v", err)
+	}
+
+	var entry wtypes.TransferEntry
+	if err := json.Unmarshal([]byte(txRecord.Entry), &entry); err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to deserialize entry: %v", err)
+	}
+
+	return &tx, &entry, txRecord.Status, nil
+}
+
+// CompareEntries compares two TransferEntry objects and returns true if they are equal
+func CompareEntries(a, b *wtypes.TransferEntry) bool {
+	if a == nil || b == nil {
+		return a == b // Both should be nil to be equal
+	}
+
+	return a.ID == b.ID &&
+		a.MinerAccountID == b.MinerAccountID &&
+		a.ToAddress == b.ToAddress &&
+		a.Value.Equal(b.Value)
 }

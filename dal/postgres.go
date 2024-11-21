@@ -2,6 +2,7 @@ package dal
 
 import (
 	"database/sql"
+	"log"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -29,7 +30,7 @@ func DBInit(config *config.Config) {
 
 	for _, dbItem := range dbConfigs {
 		if dbItem.DSN != "" {
-			log.Info(dbItem.DSN)
+			log.Println(dbItem.DSN)
 			if *dbItem.DB, err = gorm.Open(postgres.Open(dbItem.DSN), &gorm.Config{}); err != nil {
 				log.Fatal(err)
 			}

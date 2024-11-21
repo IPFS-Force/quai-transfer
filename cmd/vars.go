@@ -1,13 +1,10 @@
 package main
 
 import (
-	"github.com/ipfs/go-log/v2"
+	"log"
 )
 
 var (
-	// Global logger instance
-	logging = log.Logger("wallet")
-
 	// Configuration file path
 	configFile string
 
@@ -17,6 +14,10 @@ var (
 	// Key directory path
 	keyDir string = "./.keystore"
 )
+
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+}
 
 const (
 	// AppName Application names and descriptions

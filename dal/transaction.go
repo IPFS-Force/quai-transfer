@@ -2,8 +2,10 @@ package dal
 
 import (
 	"context"
-	"quai-transfer/dal/models"
+	"fmt"
 	"time"
+
+	"quai-transfer/dal/models"
 
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/shopspring/decimal"
@@ -37,7 +39,7 @@ func (d *TransactionDAL) UpdateTransactionStatus(ctx context.Context, txHash str
 		}).Error
 }
 
-// 根据id判断数据库中是否已经存在该交易
+// IsTransactionExist
 func (d *TransactionDAL) IsTransactionExist(ctx context.Context, id int32) (bool, error) {
 	var tx models.Transaction
 	tmp := d.db.WithContext(ctx).Model(&models.Transaction{}).Where("id = ?", id).First(&tx)
@@ -45,4 +47,23 @@ func (d *TransactionDAL) IsTransactionExist(ctx context.Context, id int32) (bool
 		return false, err
 	}
 	return tmp.RowsAffected > 0, nil
+}
+
+// GetTransactionByID retrieves a transaction by its ID
+func (d *TransactionDAL) GetTransactionByID(ctx context.Context, id int32) (*models.Transaction, error) {
+	var tx models.Transaction
+	result := d.db.WithContext(ctx).
+		Table(tx.TableName()).
+		Select("tx::text", "entry::text", "status").
+		Where("id = ?", id).
+		Scan(&tx)
+
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil // Return nil if no record found
+		}
+		return nil, fmt.Errorf("failed to get transaction: %v", result.Error)
+	}
+
+	return &tx, nil
 }

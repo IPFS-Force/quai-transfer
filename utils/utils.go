@@ -1,31 +1,20 @@
 package utils
 
 import (
-	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
+	"quai-transfer/types"
 	"runtime"
 	"strconv"
 	"strings"
-
-	"quai-transfer/wallet"
 
 	"github.com/fatih/color"
 	"github.com/shopspring/decimal"
 )
 
-type TransferEntry struct {
-	ID             string
-	MinerAccount   string
-	Value          decimal.Decimal
-	ToAddress      string
-	AggregateIds   []string
-	MinerAccountID uint64
-}
-
-func ParseTransferCSV(filepath string) ([]*TransferEntry, error) {
+func ParseTransferCSV(filepath string) ([]*wtypes.TransferEntry, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open CSV file: %w", err)
@@ -49,7 +38,7 @@ func ParseTransferCSV(filepath string) ([]*TransferEntry, error) {
 		return nil, fmt.Errorf("invalid CSV headers, expected: %v", expectedHeaders)
 	}
 
-	transfers := make([]*TransferEntry, 0, len(records)-1)
+	transfers := make([]*wtypes.TransferEntry, 0, len(records)-1)
 	for _, record := range records[1:] {
 		if len(record) != len(expectedHeaders) {
 			return nil, fmt.Errorf("invalid record length: %v", record)
@@ -59,12 +48,27 @@ func ParseTransferCSV(filepath string) ([]*TransferEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse miner_account_id: %w", err)
 		}
-		transfer := &TransferEntry{
-			ID:             record[0],
+
+		aggregateIds := make([]int64, 0)
+		for _, id := range strings.Fields(record[4]) {
+			aggregateId, err := strconv.ParseInt(id, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse aggregate_id: %w", err)
+			}
+			aggregateIds = append(aggregateIds, aggregateId)
+		}
+
+		id, err := strconv.ParseInt(record[0], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse id: %w", err)
+		}
+
+		transfer := &wtypes.TransferEntry{
+			ID:             int32(id),
 			MinerAccount:   record[1],
 			Value:          decimal.RequireFromString(record[2]),
 			ToAddress:      record[3],
-			AggregateIds:   strings.Fields(record[4]), // Split by whitespace
+			AggregateIds:   aggregateIds,
 			MinerAccountID: minerAccountID,
 		}
 		transfers = append(transfers, transfer)
@@ -83,41 +87,6 @@ func validateHeaders(actual, expected []string) bool {
 		}
 	}
 	return true
-}
-
-func CheckBalance(ctx context.Context, w *wallet.Wallet, transfers []*TransferEntry) error {
-	// Get wallet balance
-	balance, err := w.GetBalance(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get balance: %w", err)
-	}
-	balanceDecimal := decimal.NewFromBigInt(balance, 0)
-
-	// Calculate total amount needed
-	totalAmount := decimal.Zero
-	for _, transfer := range transfers {
-		totalAmount = totalAmount.Add(transfer.Value)
-	}
-
-	// Estimate gas cost
-	gasPrice, err := w.SuggestGasPrice(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get gas price: %w", err)
-	}
-	gasPriceDecimal := decimal.NewFromBigInt(gasPrice, 0)
-
-	// Multiply gas price by 10
-	gasPriceDecimal = gasPriceDecimal.Mul(decimal.NewFromInt(10))
-
-	// Calculate total gas cost for all transfers
-	estimatedGas := gasPriceDecimal.Mul(decimal.NewFromInt(42000 * int64(len(transfers)))) // Standard transfer gas usage * 2 * estimate gas price * 10 * number of transfers
-	totalRequired := totalAmount.Add(estimatedGas)
-
-	if balanceDecimal.LessThan(totalRequired) {
-		return fmt.Errorf("insufficient balance for transfers: have %s, need %s",
-			balanceDecimal.String(), totalRequired.String())
-	}
-	return nil
 }
 
 func Json(a ...any) {

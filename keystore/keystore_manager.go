@@ -54,22 +54,11 @@ func NewKeyManager(keyDir string) (*KeyManager, error) {
 
 // CreateNewKey creates a new private key and stores it encrypted
 func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, error) {
-	// Read password
-	password, err := readPassword("Enter password for new key: ")
+	// Get password with confirmation
+	password, err := promptAndConfirmPassword("Enter password for new key: ")
 	if err != nil {
 		return common.Address{}, err
 	}
-
-	// Confirm password
-	confirmPass, err := readPassword("Confirm password: ")
-	if err != nil {
-		return common.Address{}, err
-	}
-
-	if password != confirmPass {
-		return common.Address{}, fmt.Errorf("passwords do not match")
-	}
-	fmt.Println("Password match successful!")
 
 	// Create new account
 	account, err := k.NewAccount(password, location)
@@ -253,20 +242,10 @@ func (k *KeyManager) ImportPrivateKey() (common.Address, error) {
 		PrivateKey: privateKey,
 	}
 
-	// Read password for encryption
-	password, err := readPassword("Enter password to encrypt key: ")
+	// Get password with confirmation
+	password, err := promptAndConfirmPassword("Enter password to encrypt key: ")
 	if err != nil {
 		return common.Address{}, err
-	}
-
-	// Confirm password
-	confirmPass, err := readPassword("Confirm password: ")
-	if err != nil {
-		return common.Address{}, err
-	}
-
-	if password != confirmPass {
-		return common.Address{}, fmt.Errorf("passwords do not match")
 	}
 
 	// Create account URL
@@ -291,4 +270,26 @@ func PubkeyToAddressWithoutLocation(p ecdsa.PublicKey) common.Address {
 	upperNib := (addressBytes[0] & 0xF0) >> 4 // Upper 4 bits, shifted right
 	location := common.Location{upperNib, lowerNib}
 	return crypto.PubkeyToAddress(p, location)
+}
+
+// promptAndConfirmPassword prompts the user for a password and confirms it
+func promptAndConfirmPassword(initialPrompt string) (string, error) {
+	// Read password
+	password, err := readPassword(initialPrompt)
+	if err != nil {
+		return "", err
+	}
+
+	// Confirm password
+	confirmPass, err := readPassword("Confirm password: ")
+	if err != nil {
+		return "", err
+	}
+
+	if password != confirmPass {
+		return "", fmt.Errorf("passwords do not match")
+	}
+	fmt.Println("Password match successful!")
+
+	return password, nil
 }
