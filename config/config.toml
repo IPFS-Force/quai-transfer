@@ -1,0 +1,36 @@
+# General Configuration
+dsn = "postgres://quai_jobs_wr:4Ye8np96VbDMF4HN@139.196.147.220:7432/test_transfer_record?connect_timeout=100&sslmode=disable&TimeZone=UTC"
+network = "garden"
+rpc = "http://localhost:8545"
+protocol = "quai"
+location = "0-0"  # Default location
+key_file = "./keystore/key.json"
+debug = true
+
+# Network configurations for different Quai networks
+[networks]
+
+[networks.colosseum]
+chain_id = 9000
+[networks.colosseum.rpc_urls]
+"0-0" = "https://rpc.quai.network/cyprus1/"
+
+[networks.garden]
+chain_id = 9000
+[networks.garden.rpc_urls]
+"0-0" = "https://rpc.quai.network/cyprus1/"
+
+[networks.local]
+chain_id = 1337
+[networks.local.rpc_urls]
+"0-0" = "http://localhost:9200"
+
+[networks.orchard]
+chain_id = 15000
+[networks.orchard.rpc_urls]
+"0-0" = "http://localhost:9200"
+
+[networks.lighthouse]
+chain_id = 17000
+[networks.lighthouse.rpc_urls]
+"0-0" = "http://localhost:9200" 
