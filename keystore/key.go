@@ -100,7 +100,7 @@ func writeTemporaryKeyFile(file string, content []byte) (string, error) {
 
 // storeNewKey creates a new key and stores it in the keystore.
 // todo Quai and Qi have different address formats
-func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Location) (*Key, Account, error) {
+func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Location, protocol string) (*Key, Account, error) {
 	key, err := newKey(rand, location)
 	if err != nil {
 		return nil, Account{}, err
@@ -111,8 +111,13 @@ func storeNewKey(ks keyStore, rand io.Reader, auth string, location common.Locat
 		region := firstByte & 0x0F      // Get bits 0-3 for region
 		zone := (firstByte >> 4) & 0x0F // Get bits 4-7 for zone
 		if int(region) == location.Region() && int(zone) == location.Zone() {
-			break
+			if protocol == "quai" && key.Address.Bytes()[1] <= 127 {
+				break
+			} else if protocol == "qi" && key.Address.Bytes()[1] > 127 {
+				break
+			}
 		}
+
 		// 如果上面没有生成符合location的地址，则重试
 		key, err = newKey(rand, location)
 		if err != nil {

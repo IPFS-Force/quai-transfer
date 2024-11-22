@@ -124,7 +124,7 @@ func ToQuai(ivalue interface{}) decimal.Decimal {
 	return result
 }
 
-// ToWei converts an Quai value in val (as a string) to wei (as *big.Int)
+// ToWei converts a Quai value in val (as a string) to wei (as *big.Int)
 func ToWei(v string) (*big.Int, bool) {
 	value, ok := new(big.Float).SetString(v)
 	if !ok {
@@ -140,4 +140,14 @@ func ToWei(v string) (*big.Int, bool) {
 	value.Int(wei) // Extracts the integer part of the big.Float
 
 	return wei, true
+}
+
+// ValidateProtocol checks if the given protocol is valid and returns the normalized protocol string
+func ValidateProtocol(protocol string) (string, error) {
+	// Trim spaces and convert to lowercase
+	protocol = strings.TrimSpace(strings.ToLower(protocol))
+	if protocol != "quai" && protocol != "qi" {
+		return "", fmt.Errorf("invalid protocol: %s. Must be either 'quai' or 'qi'", protocol)
+	}
+	return protocol, nil
 }

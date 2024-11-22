@@ -53,7 +53,7 @@ func NewKeyManager(keyDir string) (*KeyManager, error) {
 }
 
 // CreateNewKey creates a new private key and stores it encrypted
-func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, error) {
+func (k *KeyManager) CreateNewKey(location common.Location, protocol string) (common.Address, error) {
 	// Get password with confirmation
 	password, err := promptAndConfirmPassword("Enter password for new key: ")
 	if err != nil {
@@ -61,7 +61,7 @@ func (k *KeyManager) CreateNewKey(location common.Location) (common.Address, err
 	}
 
 	// Create new account
-	account, err := k.NewAccount(password, location)
+	account, err := k.NewAccount(password, location, protocol)
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to create new account: %v", err)
 	}
@@ -182,8 +182,8 @@ func zeroKey(k *ecdsa.PrivateKey) {
 
 // NewAccount generates a new key and stores it into the key directory,
 // encrypting it with the passphrase.
-func (k *KeyManager) NewAccount(passphrase string, location common.Location) (Account, error) {
-	_, account, err := storeNewKey(k.storage, crand.Reader, passphrase, location)
+func (k *KeyManager) NewAccount(passphrase string, location common.Location, protocol string) (Account, error) {
+	_, account, err := storeNewKey(k.storage, crand.Reader, passphrase, location, protocol)
 	if err != nil {
 		return Account{}, err
 	}

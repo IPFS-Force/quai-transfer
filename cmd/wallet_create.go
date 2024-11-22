@@ -5,6 +5,7 @@ import (
 
 	"quai-transfer/config"
 	"quai-transfer/keystore"
+	"quai-transfer/utils"
 
 	"github.com/spf13/cobra"
 )
@@ -16,7 +17,7 @@ var (
 )
 
 var createWalletCmd = &cobra.Command{
-	Use:     WalletCmdName + "",
+	Use:     WalletCmdName + " [-p|--protocol quai|qi]",
 	Short:   WalletCmdShortDesc,
 	RunE:    runCreateWallet,
 	Version: Version,
@@ -24,7 +25,7 @@ var createWalletCmd = &cobra.Command{
 
 func init() {
 	flags := createWalletCmd.Flags()
-	flags.StringVarP(&protocol, "protocol", "p", "Quai", "Protocol type (Quai/Qi)")
+	flags.StringVarP(&protocol, "protocol", "p", "quai", "Protocol type (quai/qi)")
 	flags.SortFlags = false
 
 	// _ = createWalletCmd.MarkFlagRequired("protocol")
@@ -46,7 +47,12 @@ func runCreateWallet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize keystore: %w", err)
 	}
 
-	address, err := ks.CreateNewKey(cfg.Location)
+	normalizedProtocol, err := utils.ValidateProtocol(protocol)
+	if err != nil {
+		return err
+	}
+
+	address, err := ks.CreateNewKey(cfg.Location, normalizedProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to create new key: %w", err)
 	}
