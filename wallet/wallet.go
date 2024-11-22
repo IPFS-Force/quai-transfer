@@ -283,7 +283,6 @@ func (w *Wallet) MonitorAndConfirmTransaction(ctx context.Context, tx *types.Tra
 		return err
 	}
 
-	// Print receipt details for logging
 	w.printReceiptDetails(receipt)
 
 	gasUsedAmount := decimal.NewFromInt(int64(receipt.GasUsed)).Mul(decimal.NewFromBigInt(tx.GasPrice(), 0))
@@ -552,7 +551,7 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 	}
 
 	if signedTx == nil {
-		fmt.Printf("entry %d: transaction not found in database, creating new transaction\n", entry.ID)
+		fmt.Printf("Entry ID %d: Creating new transaction (not found in database)\n", entry.ID)
 		// Create and store transaction
 		signedTx, err = w.CreateTransaction(ctx, entry)
 		if err != nil {
@@ -569,11 +568,10 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 		return w.MonitorAndConfirmTransaction(ctx, signedTx)
 	}
 
-	// Handle specific error cases
 	switch {
 	case strings.Contains(err.Error(), "nonce too low"):
-		if err := w.CheckTransactionAndConfirm(ctx, signedTx); err != nil {
-			return fmt.Errorf("failed to check and confirm transaction: %w", err)
+		if err = w.CheckTransactionAndConfirm(ctx, signedTx); err != nil {
+			return fmt.Errorf("failed to check and confirm transaction: receipt %w and nonce too low", err)
 		}
 		return nil
 
@@ -650,7 +648,7 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 	if err = w.txDAL.CreateTransaction(ctx, txRecord); err != nil {
 		return nil, fmt.Errorf("failed to create transaction record: %v", err)
 	}
-
+	log.Printf("Created transaction record: %d, hash: %s\n", txRecord.ID, txRecord.TxHash)
 	return signedTx, nil
 }
 
@@ -695,7 +693,6 @@ func (w *Wallet) GetTransactionByID(ctx context.Context, id int32) (*types.Trans
 	if txRecord == nil {
 		return nil, nil, 0, nil // Return nil if no record found
 	}
-	fmt.Println(txRecord)
 
 	var tx types.Transaction
 	if err := json.Unmarshal([]byte(txRecord.Tx), &tx); err != nil {

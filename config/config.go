@@ -19,7 +19,6 @@ type NetworkConfig struct {
 	RPCURLs map[string]string `mapstructure:"rpc_urls"`
 }
 
-// Config holds all configuration
 type Config struct {
 	InterDSN string                           `mapstructure:"dsn"`
 	Network  wtypes.Network                   `mapstructure:"network"`

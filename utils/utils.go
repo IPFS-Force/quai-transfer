@@ -107,6 +107,7 @@ func runFuncPos() string {
 	return fmt.Sprintf("%s:%d", file, line)
 }
 
+// ToQuai converts an any Quai wei value to a Quai decimal.Decimal
 func ToQuai(ivalue interface{}) decimal.Decimal {
 	value := new(big.Int)
 	switch v := ivalue.(type) {
@@ -123,7 +124,7 @@ func ToQuai(ivalue interface{}) decimal.Decimal {
 	return result
 }
 
-// ToWei converts an Ethereum value in val (as a string) to wei (as *big.Int)
+// ToWei converts an Quai value in val (as a string) to wei (as *big.Int)
 func ToWei(v string) (*big.Int, bool) {
 	value, ok := new(big.Float).SetString(v)
 	if !ok {

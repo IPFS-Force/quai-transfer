@@ -51,7 +51,6 @@ func runCreateWallet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create new key: %w", err)
 	}
 
-	// TODO: Implement wallet creation logic
 	fmt.Printf("Creating new wallet with address: %s\n", address.Hex())
 
 	return nil

@@ -39,7 +39,7 @@ func (d *TransactionDAL) UpdateTransactionStatus(ctx context.Context, txHash str
 		}).Error
 }
 
-// IsTransactionExist
+// IsTransactionExist checks if a transaction exists by its ID
 func (d *TransactionDAL) IsTransactionExist(ctx context.Context, id int32) (bool, error) {
 	var tx models.Transaction
 	tmp := d.db.WithContext(ctx).Model(&models.Transaction{}).Where("id = ?", id).First(&tx)
