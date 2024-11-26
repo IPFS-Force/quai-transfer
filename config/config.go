@@ -71,7 +71,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		Network:  wtypes.Network(strings.ToLower(rawConfig.Network)),
 		RPC:      rawConfig.Rpc,
 		Protocol: rawConfig.Protocol,
-		Location: stringToLocation(rawConfig.Location),
+		Location: StringToLocation(rawConfig.Location),
 		KeyFile:  rawConfig.KeyFile,
 		Networks: make(map[wtypes.Network]NetworkConfig),
 	}
@@ -102,7 +102,7 @@ func LoadConfig(configPath string) (*Config, error) {
 	return config, nil
 }
 
-func stringToLocation(s string) common.Location {
+func StringToLocation(s string) common.Location {
 	var region, zone int
 	fmt.Sscanf(s, "%d-%d", &region, &zone)
 	loc, err := common.NewLocation(region, zone)

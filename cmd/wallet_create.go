@@ -11,13 +11,12 @@ import (
 )
 
 var (
-	num      int64
-	iscsv    bool
 	protocol string
+	location string
 )
 
 var createWalletCmd = &cobra.Command{
-	Use:     WalletCmdName + " [-p|--protocol quai|qi]",
+	Use:     WalletCmdName + " [-p|--protocol quai|qi] [-l|--location zone-region]",
 	Short:   WalletCmdShortDesc,
 	RunE:    runCreateWallet,
 	Version: Version,
@@ -26,22 +25,11 @@ var createWalletCmd = &cobra.Command{
 func init() {
 	flags := createWalletCmd.Flags()
 	flags.StringVarP(&protocol, "protocol", "p", "quai", "Protocol type (quai/qi)")
+	flags.StringVarP(&location, "location", "l", "0-0", "Location in format zone-region")
 	flags.SortFlags = false
-
-	// _ = createWalletCmd.MarkFlagRequired("protocol")
 }
 
 func runCreateWallet(cmd *cobra.Command, args []string) error {
-	var (
-		err error
-	)
-
-	cfg, err := config.LoadConfig(configFile)
-	if err != nil {
-		return fmt.Errorf("failed to initialize config: %w", err)
-	}
-
-	// Initialize keystore
 	ks, err := keystore.NewKeyManager(keyDir)
 	if err != nil {
 		return fmt.Errorf("failed to initialize keystore: %w", err)
@@ -52,7 +40,12 @@ func runCreateWallet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	address, err := ks.CreateNewKey(cfg.Location, normalizedProtocol)
+	loc := config.StringToLocation(location)
+	if err != nil {
+		return fmt.Errorf("invalid location format: %w", err)
+	}
+
+	address, err := ks.CreateNewKey(loc, normalizedProtocol)
 	if err != nil {
 		return fmt.Errorf("failed to create new key: %w", err)
 	}
