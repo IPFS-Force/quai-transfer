@@ -36,11 +36,11 @@ func main() {
 	}
 	db, err := gorm.Open(postgres.Open(cfg.InterDSN), config)
 	if err != nil {
-		fmt.Errorf("failed to connect database: %v", err)
+		log.Fatalf("failed to connect database: %v", err)
 	}
 
 	if err := db.AutoMigrate(&models.Transaction{}); err != nil {
-		fmt.Errorf("failed to migrate block table: %v", err)
+		log.Fatalf("failed to migrate block table: %v", err)
 	}
 
 	homeDir, err := os.UserHomeDir()
@@ -48,30 +48,30 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 设置keystore目录
+	// set keystore directory
 	keystoreDir := filepath.Join(homeDir, ".quai", "keystore")
 
-	// 创建KeyManager实例
+	// create KeyManager instance
 	km, err := keystore.NewKeyManager(keystoreDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// 创建新私钥
+	// create new private key
 	create_address, err := km.CreateNewKey(common.Location{0, 0}, "quai")
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Created new account: %s\n", create_address.Hex())
 
-	// 加载私钥
+	// load private key
 	key, err := km.LoadKey(create_address)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Successfully loaded private key for address: %s\n", key.Address.Hex())
 
-	// 1. 创建钱包实例
+	// 1. create wallet instance
 	privateKey := "ba071aefbc898130b2c83e3235a2b12d07312ca3467b2ee9a093ab4dd5af7cc2"
 
 	w, err := wallet.NewWalletFromPrivateKeyString(
@@ -79,33 +79,33 @@ func main() {
 		cfg,
 	)
 	if err != nil {
-		log.Fatalf("创建钱包失败: %v", err)
+		log.Fatalf("create wallet failed: %v", err)
 	}
 	defer w.Close()
 
-	// 2. 获取钱包地址
+	// 2. get wallet address
 	address := w.GetAddress()
-	fmt.Printf("钱包地址: %s\n", address.Hex())
+	fmt.Printf("wallet address: %s\n", address.Hex())
 
-	// 3. 获取钱包余额
+	// 3. get wallet balance
 	ctx := context.Background()
 	balance, err := w.GetBalance(ctx)
 	if err != nil {
-		log.Fatalf("获取余额失败: %v", err)
+		log.Fatalf("get balance failed: %v", err)
 	}
-	fmt.Printf("钱包余额: %s wei\n", balance.String())
+	fmt.Printf("wallet balance: %s wei\n", balance.String())
 
-	// 4. 准备交易参数
-	toAddress := common.HexToAddress("0x000F82F8e14298aD129E8b0FC5dd76e10C9F02B8", w.GetLocation()) // 例如: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-	amount := new(big.Int).Mul(big.NewInt(1), big.NewInt(1e17))                                     // 1 QUAI = 10^18 wei
+	// 4. prepare transaction parameters
+	toAddress := common.HexToAddress("0x000F82F8e14298aD129E8b0FC5dd76e10C9F02B8", w.GetLocation())
+	amount := new(big.Int).Mul(big.NewInt(1), big.NewInt(1e17)) // 1 QUAI = 10^18 wei
 
-	// 5. 发送交易
+	// 5. send transaction
 	tx, err := w.SendQuai(ctx, toAddress, amount)
 	if err != nil {
-		log.Fatalf("发送交易失败: %v", err)
+		log.Fatalf("send transaction failed: %v", err)
 	}
 
 	time.Sleep(1000 * time.Second)
-	// 6. 打印交易哈希
-	fmt.Printf("交易已发送，交易哈希: %s\n", tx.Hash().Hex())
+	// 6. print transaction hash
+	fmt.Printf("transaction sent, transaction hash: %s\n", tx.Hash().Hex())
 }

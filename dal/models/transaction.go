@@ -17,9 +17,9 @@ const (
 type Transaction struct {
 	ID                int32           `gorm:"primaryKey"` // not auto increment, but business increment (for deduplication)
 	MinerAccount      string          `gorm:"type:varchar(42)"`
-	Payer             string          `gorm:"type:varchar(42);index"`
+	Payer             string          `gorm:"type:varchar(42)"`
 	Nonce             uint64          `gorm:"type:bigint"`
-	ToAddress         string          `gorm:"type:varchar(42)"`
+	ToAddress         string          `gorm:"type:varchar(42);index"`
 	TxHash            string          `gorm:"type:varchar(66);uniqueIndex"`
 	Value             decimal.Decimal `gorm:"type:decimal(78,0)"`
 	Gas               decimal.Decimal `gorm:"type:decimal(78,0)"`
@@ -36,5 +36,5 @@ type Transaction struct {
 }
 
 func (t *Transaction) TableName() string {
-	return "transactions"
+	return "quai_transfer_record"
 }

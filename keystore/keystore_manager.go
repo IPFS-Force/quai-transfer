@@ -35,6 +35,8 @@ type KeyManager struct {
 	keyDir  string
 }
 
+var _ KeyStoreManager = (*KeyManager)(nil)
+
 // NewKeyManager creates a new KeyManager instance
 func NewKeyManager(keyDir string) (*KeyManager, error) {
 	// Ensure directory exists

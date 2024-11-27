@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/big"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,7 @@ const (
 	GasLimit          = 420000
 	MinerTip          = 1000
 	ReceiptMaxRetries = 30 // Wait for about 5 minutes (30 * 10 seconds)
-	NonceWaitTime     = 5 * time.Second
+	NonceWaitTime     = 2 * time.Second
 	ReceiptWaitTime   = 15 * time.Second
 )
 
@@ -65,8 +66,7 @@ type Wallet struct {
 	txDAL          *dal.TransactionDAL
 	config         *config.Config
 	nonceMutex     sync.Mutex
-	maxLocalNonce  uint64          // Replace localNonces map with a single counter
-	pendingNonces  map[uint64]bool // Track only pending nonces
+	maxLocalNonce  uint64
 	pendingTxs     map[common.Hash]*PendingTx
 	pendingTxMutex sync.RWMutex
 }
@@ -112,15 +112,13 @@ func (w *Wallet) GetNonce(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 
-	// Use the larger of pendingNonce and maxLocalNonce + 1
+	// Use the largest of pendingNonce and maxLocalNonce + 1
 	nonce := pendingNonce
 	if w.maxLocalNonce >= pendingNonce {
 		nonce = w.maxLocalNonce + 1
 	}
 
-	// Update maxLocalNonce and track pending nonce
 	w.maxLocalNonce = nonce
-	w.pendingNonces[nonce] = true
 
 	// Wait for NonceWaitTime seconds
 	select {
@@ -190,7 +188,6 @@ func (w *Wallet) initClient() error {
 		address:       w.address,
 		txDAL:         w.txDAL,
 		maxLocalNonce: 0,
-		pendingNonces: make(map[uint64]bool),
 		pendingTxs:    make(map[common.Hash]*PendingTx),
 	}
 
@@ -349,8 +346,6 @@ func (w *Wallet) MonitorAndConfirmTransaction(ctx context.Context, tx *types.Tra
 		return err
 	}
 
-	// Cleanup confirmed nonces
-	w.cleanupConfirmedNonces(tx.Nonce())
 	fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
 	return nil
 }
@@ -378,8 +373,6 @@ func (w *Wallet) CheckTransactionAndConfirm(ctx context.Context, tx *types.Trans
 		return err
 	}
 
-	// Cleanup confirmed nonces
-	w.cleanupConfirmedNonces(tx.Nonce())
 	// fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
 	return nil
 }
@@ -611,12 +604,14 @@ func (w *Wallet) ProcessEntryAsync(ctx context.Context, entry *wtypes.TransferEn
 		log.Printf("Entry ID %d: Get transaction (found in database)\n", entry.ID)
 	}
 
-	w.pendingTxMutex.Lock()
-	w.pendingTxs[signedTx.Hash()] = &PendingTx{
-		Tx:    signedTx,
-		Entry: entry,
-	}
-	w.pendingTxMutex.Unlock()
+	func() {
+		w.pendingTxMutex.Lock()
+		defer w.pendingTxMutex.Unlock()
+		w.pendingTxs[signedTx.Hash()] = &PendingTx{
+			Tx:    signedTx,
+			Entry: entry,
+		}
+	}()
 
 	w.printTxDetails(signedTx)
 	txHash := signedTx.Hash().Hex()
@@ -686,6 +681,8 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 }
 
 // CreateTransaction creates a new transaction and stores it in the database
+// todo 创建交易才能消耗一个nonce
+// todo 日志也往本地哪个文件中输出一份
 func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEntry) (*types.Transaction, error) {
 	from := w.GetAddress()
 	to := common.HexToAddress(entry.ToAddress, w.GetLocation())
@@ -861,12 +858,15 @@ func (w *Wallet) ProcessBatchEntry(ctx context.Context, entries []*wtypes.Transf
 		time.Since(now), len(entries), successCnt, failedCnt, processedCnt, unprocessedCount, invalidCnt)
 }
 
-func (w *Wallet) cleanupConfirmedNonces(nonce uint64) {
-	w.nonceMutex.Lock()
-	defer w.nonceMutex.Unlock()
-
-	// Remove confirmed nonce from pending
-	delete(w.pendingNonces, nonce)
+// getCopyPendingTxs returns a slice of pending transactions in a thread-safe way
+func (w *Wallet) getCopyPendingTxs() []*PendingTx {
+	w.pendingTxMutex.RLock()
+	defer w.pendingTxMutex.RUnlock()
+	copyPendingTxs := make([]*PendingTx, 0, len(w.pendingTxs))
+	for _, tx := range w.pendingTxs {
+		copyPendingTxs = append(copyPendingTxs, tx)
+	}
+	return copyPendingTxs
 }
 
 // MonitorAllTransactions monitors all pending transactions with timeout context
@@ -897,13 +897,18 @@ func (w *Wallet) MonitorAllTransactions(ctx context.Context) (int, error) {
 
 		case <-ticker.C:
 			w.checkPendingTransactions()
-			w.pendingTxMutex.RLock()
-			pendingDetails := make([]string, 0, len(w.pendingTxs))
-			for txHash, tx := range w.pendingTxs {
-				pendingDetails = append(pendingDetails, fmt.Sprintf("[%d, %s]", tx.Entry.ID, txHash.Hex()))
+			sortedTxs := w.getCopyPendingTxs()
+
+			sort.Slice(sortedTxs, func(i, j int) bool {
+				return sortedTxs[i].Tx.Nonce() < sortedTxs[j].Tx.Nonce()
+			})
+
+			pendingDetails := make([]string, 0, len(sortedTxs))
+			for _, tx := range sortedTxs {
+				pendingDetails = append(pendingDetails, fmt.Sprintf("[%d, %d, %s]", tx.Entry.ID, tx.Tx.Nonce(), tx.Tx.Hash().Hex()))
 			}
-			w.pendingTxMutex.RUnlock()
-			log.Printf("%d transactions in the pending queue: %s, waiting %s seconds...",
+
+			log.Printf("Pending queue: %d transactions 「𝗘𝗻𝘁𝗿𝘆 𝗜𝗗, 𝗡𝗼𝗻𝗰𝗲, 𝗧𝘅 𝗛𝗮𝘀𝗵」 %s, rechecking in %s seconds...",
 				len(w.pendingTxs),
 				strings.Join(pendingDetails, ", "),
 				ReceiptWaitTime)
@@ -912,21 +917,19 @@ func (w *Wallet) MonitorAllTransactions(ctx context.Context) (int, error) {
 }
 
 func (w *Wallet) checkPendingTransactions() {
-	w.pendingTxMutex.RLock()
-	pendingTxs := make([]*PendingTx, 0, len(w.pendingTxs))
-	for _, tx := range w.pendingTxs {
-		pendingTxs = append(pendingTxs, tx)
-	}
-	w.pendingTxMutex.RUnlock()
+	pendingTxs := w.getCopyPendingTxs()
 
 	for _, pendingTx := range pendingTxs {
 		err := w.CheckTransactionAndConfirm(context.Background(), pendingTx.Tx)
 		if err == nil {
 			log.Printf("\n✅ TRANSFER SUCCESSFUL ✅\nMiner Account: %s\nEntry ID: %d\nTransferred: %s Quai\n",
 				pendingTx.Entry.MinerAccount, pendingTx.Entry.ID, utils.ToQuai(pendingTx.Entry.Value.String()))
-			w.pendingTxMutex.Lock()
-			delete(w.pendingTxs, pendingTx.Tx.Hash())
-			w.pendingTxMutex.Unlock()
+
+			func() {
+				w.pendingTxMutex.Lock()
+				defer w.pendingTxMutex.Unlock()
+				delete(w.pendingTxs, pendingTx.Tx.Hash())
+			}()
 		}
 	}
 }
