@@ -22,7 +22,6 @@ type NetworkConfig struct {
 type Config struct {
 	InterDSN string                           `mapstructure:"dsn"`
 	Network  wtypes.Network                   `mapstructure:"network"`
-	RPC      string                           `mapstructure:"rpc"`
 	Protocol string                           `mapstructure:"protocol"`
 	Location common.Location                  `mapstructure:"location"`
 	KeyFile  string                           `mapstructure:"key_file"`
@@ -59,29 +58,27 @@ func LoadConfig(configPath string) (*Config, error) {
 			ChainID int64             `mapstructure:"chain_id"`
 			RPCURLs map[string]string `mapstructure:"rpc_urls"`
 		} `mapstructure:"networks"`
+		Debug bool `mapstructure:"debug"`
 	}
 
 	if err := viper.Unmarshal(&rawConfig); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	// Convert the raw config to our Config type
 	config := &Config{
 		InterDSN: rawConfig.InterDSN,
 		Network:  wtypes.Network(strings.ToLower(rawConfig.Network)),
-		RPC:      rawConfig.Rpc,
 		Protocol: rawConfig.Protocol,
 		Location: StringToLocation(rawConfig.Location),
 		KeyFile:  rawConfig.KeyFile,
 		Networks: make(map[wtypes.Network]NetworkConfig),
+		Debug:    rawConfig.Debug,
 	}
 
-	// Validate network
 	if !wtypes.ValidNetworks[config.Network] {
 		return nil, fmt.Errorf("invalid network %q", config.Network)
 	}
 
-	// Convert networks map
 	for name, netConfig := range rawConfig.Networks {
 		network := wtypes.Network(strings.ToLower(name))
 		if !wtypes.ValidNetworks[network] {

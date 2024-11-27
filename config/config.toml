@@ -1,11 +1,10 @@
 # General Configuration
 dsn = "postgres://quai_jobs_wr:4Ye8np96VbDMF4HN@139.196.147.220:7432/test_transfer_record?connect_timeout=100&sslmode=disable&TimeZone=UTC"
 network = "garden"
-rpc = "http://localhost:8545"
 protocol = "quai"
 location = "0-0"  # Default location
 key_file = "./keystore/key.json"
-debug = true
+debug = false
 
 # Network configurations for different Quai networks
 [networks]

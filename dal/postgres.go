@@ -3,10 +3,12 @@ package dal
 import (
 	"database/sql"
 	"log"
+	"os"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"quai-transfer/config"
 )
 
@@ -30,10 +32,23 @@ func DBInit(config *config.Config) {
 
 	for _, dbItem := range dbConfigs {
 		if dbItem.DSN != "" {
-			log.Println(dbItem.DSN)
 			if *dbItem.DB, err = gorm.Open(postgres.Open(dbItem.DSN), &gorm.Config{}); err != nil {
 				log.Fatal(err)
 			}
+
+			newLogger := logger.New(
+				log.New(os.Stdout, "\r\n", log.LstdFlags),
+				logger.Config{
+					SlowThreshold:             time.Second,
+					LogLevel:                  logger.Error,
+					IgnoreRecordNotFoundError: true,
+					Colorful:                  true,
+				},
+			)
+
+			*dbItem.DB = (*dbItem.DB).Session(&gorm.Session{
+				Logger: newLogger,
+			})
 
 			if sqlDB, err = (*dbItem.DB).DB(); err != nil {
 				log.Fatal(err)

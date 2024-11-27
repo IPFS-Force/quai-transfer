@@ -16,7 +16,7 @@ const (
 
 type Transaction struct {
 	ID                int32           `gorm:"primaryKey"` // not auto increment, but business increment (for deduplication)
-	MinerAccount      uint            `gorm:"type:int8"`
+	MinerAccount      string          `gorm:"type:varchar(42)"`
 	Payer             string          `gorm:"type:varchar(42);index"`
 	Nonce             uint64          `gorm:"type:bigint"`
 	ToAddress         string          `gorm:"type:varchar(42)"`

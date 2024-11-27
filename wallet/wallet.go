@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"quai-transfer/config"
@@ -37,6 +39,8 @@ const (
 	GasLimit          = 420000
 	MinerTip          = 1000
 	ReceiptMaxRetries = 30 // Wait for about 5 minutes (30 * 10 seconds)
+	NonceWaitTime     = 5 * time.Second
+	ReceiptWaitTime   = 15 * time.Second
 )
 
 // ChainIDMapping holds the expected and actual chain IDs
@@ -45,16 +49,26 @@ type ChainIDMapping struct {
 	Actual   *big.Int
 }
 
+type PendingTx struct {
+	Tx    *types.Transaction
+	Entry *wtypes.TransferEntry
+}
+
 // Wallet represents a wallet that can send both Quai and Qi transactions
 type Wallet struct {
-	privateKey *ecdsa.PrivateKey
-	client     *ethclient.Client
-	chainID    *ChainIDMapping
-	location   common.Location
-	network    wtypes.Network
-	address    common.Address
-	txDAL      *dal.TransactionDAL
-	config     *config.Config
+	privateKey     *ecdsa.PrivateKey
+	client         *ethclient.Client
+	chainID        *ChainIDMapping
+	location       common.Location
+	network        wtypes.Network
+	address        common.Address
+	txDAL          *dal.TransactionDAL
+	config         *config.Config
+	nonceMutex     sync.Mutex
+	maxLocalNonce  uint64          // Replace localNonces map with a single counter
+	pendingNonces  map[uint64]bool // Track only pending nonces
+	pendingTxs     map[common.Hash]*PendingTx
+	pendingTxMutex sync.RWMutex
 }
 
 func (w *Wallet) GetLocation() common.Location {
@@ -76,7 +90,9 @@ func (w *Wallet) BroadcastTransaction(ctx context.Context, tx *types.Transaction
 		if err != nil {
 			return err
 		}
-		log.Println("transaction raw data:", hexutil.Encode(data))
+		if w.config.Debug {
+			log.Printf("transaction hash: %s, transaction raw data: %s", tx.Hash().Hex(), hexutil.Encode(data))
+		}
 	}
 
 	return w.client.SendTransaction(ctx, tx)
@@ -87,7 +103,38 @@ func (w *Wallet) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 }
 
 func (w *Wallet) GetNonce(ctx context.Context) (uint64, error) {
-	return w.client.PendingNonceAt(ctx, w.GetAddress().MixedcaseAddress())
+	w.nonceMutex.Lock()
+	defer w.nonceMutex.Unlock()
+
+	// Get pending nonce from the network
+	pendingNonce, err := w.client.PendingNonceAt(ctx, w.GetAddress().MixedcaseAddress())
+	if err != nil {
+		return 0, err
+	}
+
+	// Use the larger of pendingNonce and maxLocalNonce + 1
+	nonce := pendingNonce
+	if w.maxLocalNonce >= pendingNonce {
+		nonce = w.maxLocalNonce + 1
+	}
+
+	// Update maxLocalNonce and track pending nonce
+	w.maxLocalNonce = nonce
+	w.pendingNonces[nonce] = true
+
+	// Wait for NonceWaitTime seconds
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-time.After(NonceWaitTime):
+	}
+
+	if w.config.Debug {
+		log.Printf("Using nonce: %d (pending: %d, max local: %d)\n",
+			nonce, pendingNonce, w.maxLocalNonce)
+	}
+
+	return nonce, nil
 }
 
 func (w *Wallet) GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
@@ -134,14 +181,17 @@ func (w *Wallet) initClient() error {
 	}
 
 	*w = Wallet{
-		client:     client,
-		chainID:    &ChainIDMapping{Expected: netConfig.ChainID},
-		location:   location,
-		network:    w.config.Network,
-		config:     w.config,
-		privateKey: w.privateKey,
-		address:    w.address,
-		txDAL:      w.txDAL,
+		client:        client,
+		chainID:       &ChainIDMapping{Expected: netConfig.ChainID},
+		location:      location,
+		network:       w.config.Network,
+		config:        w.config,
+		privateKey:    w.privateKey,
+		address:       w.address,
+		txDAL:         w.txDAL,
+		maxLocalNonce: 0,
+		pendingNonces: make(map[uint64]bool),
+		pendingTxs:    make(map[common.Hash]*PendingTx),
 	}
 
 	return nil
@@ -161,6 +211,7 @@ func NewWalletFromKey(key *keystore.Key, cfg *config.Config) (*Wallet, error) {
 		txDAL:      dal.NewTransactionDAL(dal.InterDB),
 		address:    key.Address,
 		config:     cfg,
+		pendingTxs: make(map[common.Hash]*PendingTx),
 	}
 
 	// Initialize client and other fields
@@ -278,7 +329,6 @@ func (w *Wallet) SendQuai(ctx context.Context, to common.Address, amount *big.In
 func (w *Wallet) MonitorAndConfirmTransaction(ctx context.Context, tx *types.Transaction) (err error) {
 	receipt, err := w.WaitForReceipt(ctx, tx.Hash())
 	if err != nil {
-		// Log error but don't return since this is async
 		fmt.Printf("Error waiting for receipt: %v\n", err)
 		return err
 	}
@@ -298,6 +348,10 @@ func (w *Wallet) MonitorAndConfirmTransaction(ctx context.Context, tx *types.Tra
 		fmt.Printf("Error updating transaction status: %v\n", err)
 		return err
 	}
+
+	// Cleanup confirmed nonces
+	w.cleanupConfirmedNonces(tx.Nonce())
+	fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
 	return nil
 }
 
@@ -323,7 +377,10 @@ func (w *Wallet) CheckTransactionAndConfirm(ctx context.Context, tx *types.Trans
 		fmt.Printf("Error updating transaction status: %v\n", err)
 		return err
 	}
-	fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
+
+	// Cleanup confirmed nonces
+	w.cleanupConfirmedNonces(tx.Nonce())
+	// fmt.Printf("Check transaction %s has been confirmed in database\n", tx.Hash().Hex())
 	return nil
 }
 
@@ -530,12 +587,7 @@ func (w *Wallet) IsValidQiAddress(address string) bool {
 	return w.IsValidAddress(address) && IsInQiLedgerScope(address)
 }
 
-// ProcessEntry handles a single transfer entry
-func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) error {
-	if !w.IsValidQuaiAddress(entry.ToAddress) {
-		return fmt.Errorf("invalid Quai address: %s", entry.ToAddress)
-	}
-
+func (w *Wallet) ProcessEntryAsync(ctx context.Context, entry *wtypes.TransferEntry) error {
 	signedTx, storedEntry, status, err := w.GetTransactionByID(ctx, entry.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get transaction: %w", err)
@@ -551,12 +603,61 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 	}
 
 	if signedTx == nil {
-		fmt.Printf("Entry ID %d: Creating new transaction (not found in database)\n", entry.ID)
-		// Create and store transaction
 		signedTx, err = w.CreateTransaction(ctx, entry)
 		if err != nil {
 			return fmt.Errorf("failed to create transaction: %w", err)
 		}
+	} else {
+		log.Printf("Entry ID %d: Get transaction (found in database)\n", entry.ID)
+	}
+
+	w.pendingTxMutex.Lock()
+	w.pendingTxs[signedTx.Hash()] = &PendingTx{
+		Tx:    signedTx,
+		Entry: entry,
+	}
+	w.pendingTxMutex.Unlock()
+
+	w.printTxDetails(signedTx)
+	txHash := signedTx.Hash().Hex()
+
+	if err = w.BroadcastTransaction(ctx, signedTx); err != nil {
+		if !strings.Contains(err.Error(), "nonce too low") && !strings.Contains(err.Error(), "already known") {
+			w.pendingTxMutex.Lock()
+			delete(w.pendingTxs, signedTx.Hash())
+			w.pendingTxMutex.Unlock()
+			return fmt.Errorf("failed to broadcast transaction: %w", err)
+		}
+		log.Printf("something went wrong while broadcasting transaction but it's not serious: %v", err)
+	}
+
+	log.Printf("Entry ID %d: Transaction: %s has been broadcasted\n", entry.ID, txHash)
+	return nil
+}
+
+// ProcessEntry handles a single transfer entry
+func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) error {
+	signedTx, storedEntry, status, err := w.GetTransactionByID(ctx, entry.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+
+	// Check if transaction is already confirmed
+	if status == models.Confirmed {
+		return wtypes.ErrAlreadyProcessed
+	}
+
+	if storedEntry != nil && !CompareEntries(entry, storedEntry) {
+		return fmt.Errorf("entry mismatch for ID %d: stored entry differs from provided entry", entry.ID)
+	}
+
+	if signedTx == nil {
+		signedTx, err = w.CreateTransaction(ctx, entry)
+		if err != nil {
+			return fmt.Errorf("failed to create transaction: %w", err)
+		}
+	} else {
+		log.Printf("Entry ID %d: Get transaction (found in database)\n", entry.ID)
 	}
 
 	w.printTxDetails(signedTx)
@@ -564,7 +665,7 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 
 	err = w.BroadcastTransaction(ctx, signedTx)
 	if err == nil {
-		fmt.Printf("transaction: %s has been broadcasted\n", txHash)
+		log.Printf("Entry ID %d: Transaction: %s has been broadcasted\n", entry.ID, txHash)
 		return w.MonitorAndConfirmTransaction(ctx, signedTx)
 	}
 
@@ -593,13 +694,11 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 	if err != nil {
 		return nil, fmt.Errorf("failed to get nonce: %v", err)
 	}
-	fmt.Printf("Nonce: %d\n", nonce)
 
 	gasPrice, err := w.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %v", err)
 	}
-	fmt.Printf("Gas price: %v\n", gasPrice)
 
 	tx := types.NewTx(&types.QuaiTx{
 		ChainID:    w.chainID.Actual,
@@ -630,7 +729,7 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 
 	txRecord := &models.Transaction{
 		ID:           entry.ID,
-		MinerAccount: uint(entry.MinerAccountID),
+		MinerAccount: entry.MinerAccount,
 		Payer:        from.Hex(),
 		ToAddress:    to.Hex(),
 		TxHash:       signedTx.Hash().Hex(),
@@ -672,7 +771,7 @@ func CheckBalance(ctx context.Context, w *Wallet, transferEntries []*wtypes.Tran
 	// to make sure we have enough balance, we multiply the gas price by 10
 	gasPriceDecimal := decimal.NewFromBigInt(gasPrice, 0).Mul(decimal.NewFromInt(10))
 
-	// Calculate total gas cost for all entries ---- Standard transfer gas limit* estimate gas price * 10 * number of transfers
+	// Calculate total gas cost ———— standard transfer gas limit * estimate gas price * 10 * number of transfers
 	estimatedGas := gasPriceDecimal.Mul(decimal.NewFromInt(GasLimit * int64(len(transferEntries))))
 	totalRequired := totalAmount.Add(estimatedGas)
 
@@ -680,7 +779,7 @@ func CheckBalance(ctx context.Context, w *Wallet, transferEntries []*wtypes.Tran
 		return fmt.Errorf("insufficient balance for transfers: have %s, need %s",
 			utils.ToQuai(balanceDecimal.String()), utils.ToQuai(totalRequired.String()))
 	}
-	log.Printf("balance check passed, have %s, need %s", utils.ToQuai(balanceDecimal.String()), utils.ToQuai(totalRequired.String()))
+	log.Printf("balance check passed, have %s, need at least %s", utils.ToQuai(balanceDecimal.String()), utils.ToQuai(totalRequired.String()))
 	return nil
 }
 
@@ -717,4 +816,117 @@ func CompareEntries(a, b *wtypes.TransferEntry) bool {
 		a.MinerAccountID == b.MinerAccountID &&
 		a.ToAddress == b.ToAddress &&
 		a.Value.Equal(b.Value)
+}
+
+// ProcessBatchEntry processes multiple transfer entries asynchronously
+func (w *Wallet) ProcessBatchEntry(ctx context.Context, entries []*wtypes.TransferEntry) {
+	invalidCnt := 0
+	successCnt := 0
+	failedCnt := 0
+	processedCnt := 0
+
+	now := time.Now()
+	for _, entry := range entries {
+		if !w.IsValidQuaiAddress(entry.ToAddress) {
+			invalidCnt++
+			log.Printf("⚠️ TRANSFER INVALID | Miner: %s | ID: %d | Invalid Quai address", entry.MinerAccount, entry.ID)
+			continue
+		}
+
+		err := w.ProcessEntryAsync(ctx, entry)
+		if err != nil {
+			if errors.Is(err, wtypes.ErrAlreadyProcessed) {
+				processedCnt++
+				log.Printf("⏭️ TRANSFER SKIPPED | Miner: %s | ID: %d | Already processed", entry.MinerAccount, entry.ID)
+				continue
+			}
+			failedCnt++
+			log.Printf("❌ TRANSFER FAILED | Miner: %s | ID: %d | Error: %v", entry.MinerAccount, entry.ID, err)
+			continue
+		}
+
+		log.Printf("📤 TRANSFER QUEUED | Miner: %s | ID: %d | Amount: %s Quai", entry.MinerAccount, entry.ID, utils.ToQuai(entry.Value.String()))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	unprocessedCount, err := w.MonitorAllTransactions(ctx)
+	if err != nil {
+		log.Printf("Error monitoring transactions: %v", err)
+	}
+	// Update success count based on confirmed transactions
+	successCnt = len(entries) - invalidCnt - failedCnt - processedCnt - unprocessedCount
+	log.Printf("\n📊 BATCH TRANSFER SUMMARY 📊\nCompleted in %s\n😈 Total: %d\n✅  Success: %d\n❌  Failed: %d\n⏭️ Processed: %d\n😓 Unprocessed: %d\n⚠️ Invalid: %d\n",
+		time.Since(now), len(entries), successCnt, failedCnt, processedCnt, unprocessedCount, invalidCnt)
+}
+
+func (w *Wallet) cleanupConfirmedNonces(nonce uint64) {
+	w.nonceMutex.Lock()
+	defer w.nonceMutex.Unlock()
+
+	// Remove confirmed nonce from pending
+	delete(w.pendingNonces, nonce)
+}
+
+// MonitorAllTransactions monitors all pending transactions with timeout context
+// Returns the number of unprocessed transactions and any error that occurred
+func (w *Wallet) MonitorAllTransactions(ctx context.Context) (int, error) {
+	ticker := time.NewTicker(ReceiptWaitTime)
+	defer ticker.Stop()
+
+	w.checkPendingTransactions()
+
+	for {
+		if len(w.pendingTxs) == 0 {
+			return 0, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			// Count and log remaining pending transactions before exiting
+			w.pendingTxMutex.RLock()
+			unprocessedCount := len(w.pendingTxs)
+			for txHash, pendingTx := range w.pendingTxs {
+				log.Printf("Unprocessed transaction - Entry ID: %d, Tx Hash: %s",
+					pendingTx.Entry.ID, txHash.Hex())
+			}
+			w.pendingTxMutex.RUnlock()
+			log.Printf("Transaction monitoring stopped due to context cancellation: %v", ctx.Err())
+			return unprocessedCount, ctx.Err()
+
+		case <-ticker.C:
+			w.checkPendingTransactions()
+			w.pendingTxMutex.RLock()
+			pendingDetails := make([]string, 0, len(w.pendingTxs))
+			for txHash, tx := range w.pendingTxs {
+				pendingDetails = append(pendingDetails, fmt.Sprintf("[%d, %s]", tx.Entry.ID, txHash.Hex()))
+			}
+			w.pendingTxMutex.RUnlock()
+			log.Printf("%d transactions in the pending queue: %s, waiting %s seconds...",
+				len(w.pendingTxs),
+				strings.Join(pendingDetails, ", "),
+				ReceiptWaitTime)
+		}
+	}
+}
+
+func (w *Wallet) checkPendingTransactions() {
+	w.pendingTxMutex.RLock()
+	pendingTxs := make([]*PendingTx, 0, len(w.pendingTxs))
+	for _, tx := range w.pendingTxs {
+		pendingTxs = append(pendingTxs, tx)
+	}
+	w.pendingTxMutex.RUnlock()
+
+	for _, pendingTx := range pendingTxs {
+		err := w.CheckTransactionAndConfirm(context.Background(), pendingTx.Tx)
+		if err == nil {
+			log.Printf("\n✅ TRANSFER SUCCESSFUL ✅\nMiner Account: %s\nEntry ID: %d\nTransferred: %s Quai\n",
+				pendingTx.Entry.MinerAccount, pendingTx.Entry.ID, utils.ToQuai(pendingTx.Entry.Value.String()))
+			w.pendingTxMutex.Lock()
+			delete(w.pendingTxs, pendingTx.Tx.Hash())
+			w.pendingTxMutex.Unlock()
+		}
+	}
 }

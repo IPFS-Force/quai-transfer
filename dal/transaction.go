@@ -53,7 +53,7 @@ func (d *TransactionDAL) IsTransactionExist(ctx context.Context, id int32) (bool
 func (d *TransactionDAL) GetTransactionByID(ctx context.Context, id int32) (*models.Transaction, error) {
 	var tx models.Transaction
 	result := d.db.WithContext(ctx).
-		Select("tx::text", "entry::text", "status").
+		Select("tx", "entry", "status").
 		Where("id = ?", id).
 		First(&tx)
 
