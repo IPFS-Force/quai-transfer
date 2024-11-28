@@ -103,36 +103,7 @@ func (w *Wallet) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 }
 
 func (w *Wallet) GetNonce(ctx context.Context) (uint64, error) {
-	w.nonceMutex.Lock()
-	defer w.nonceMutex.Unlock()
-
-	// Get pending nonce from the network
-	pendingNonce, err := w.client.PendingNonceAt(ctx, w.GetAddress().MixedcaseAddress())
-	if err != nil {
-		return 0, err
-	}
-
-	// Use the largest of pendingNonce and maxLocalNonce + 1
-	nonce := pendingNonce
-	if w.maxLocalNonce >= pendingNonce {
-		nonce = w.maxLocalNonce + 1
-	}
-
-	w.maxLocalNonce = nonce
-
-	// Wait for NonceWaitTime seconds
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case <-time.After(NonceWaitTime):
-	}
-
-	if w.config.Debug {
-		log.Printf("Using nonce: %d (pending: %d, max local: %d)\n",
-			nonce, pendingNonce, w.maxLocalNonce)
-	}
-
-	return nonce, nil
+	return w.client.PendingNonceAt(ctx, w.GetAddress().MixedcaseAddress())
 }
 
 func (w *Wallet) GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
@@ -468,6 +439,7 @@ func (w *Wallet) printTxDetails(tx *types.Transaction) {
 			fmt.Printf("  Recovered From Address: %v\n", from.Hex())
 		}
 	}
+	fmt.Printf("\n")
 }
 
 // printReceiptDetails prints transaction receipt details
@@ -682,9 +654,12 @@ func (w *Wallet) ProcessEntry(ctx context.Context, entry *wtypes.TransferEntry) 
 }
 
 // CreateTransaction creates a new transaction and stores it in the database
-// todo 创建交易才能消耗一个nonce
-// todo 日志也往本地哪个文件中输出一份
-func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEntry) (*types.Transaction, error) {
+func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEntry) (tx *types.Transaction, err error) {
+	w.nonceMutex.Lock()
+	defer func() {
+		w.nonceMutex.Unlock()
+	}()
+
 	from := w.GetAddress()
 	to := common.HexToAddress(entry.ToAddress, w.GetLocation())
 
@@ -693,12 +668,27 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 		return nil, fmt.Errorf("failed to get nonce: %v", err)
 	}
 
+	if w.config.Debug {
+		log.Printf("(pending: %d, max local: %d)\n", nonce, w.maxLocalNonce)
+	}
+
+	if w.maxLocalNonce >= nonce {
+		nonce = w.maxLocalNonce + 1
+	}
+
+	// Wait for NonceWaitTime seconds
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(NonceWaitTime):
+	}
+
 	gasPrice, err := w.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %v", err)
 	}
 
-	tx := types.NewTx(&types.QuaiTx{
+	tx = types.NewTx(&types.QuaiTx{
 		ChainID:    w.chainID.Actual,
 		Nonce:      nonce,
 		GasPrice:   gasPrice,
@@ -710,7 +700,6 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 		AccessList: types.AccessList{},
 	})
 
-	// todo 统一创建失败，maxnonce - 1
 	signedTx, err := types.SignTx(tx, types.NewSigner(w.chainID.Actual, w.location), w.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign transaction: %v", err)
@@ -746,6 +735,9 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 	if err = w.txDAL.CreateTransaction(ctx, txRecord); err != nil {
 		return nil, fmt.Errorf("failed to create transaction record: %v", err)
 	}
+
+	w.maxLocalNonce = nonce
+
 	log.Printf("Created transaction record: %d, hash: %s\n", txRecord.ID, txRecord.TxHash)
 	return signedTx, nil
 }
