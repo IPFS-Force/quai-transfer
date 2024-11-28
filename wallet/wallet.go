@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"quai-transfer/config"
 	"quai-transfer/dal"
 	"quai-transfer/dal/models"
@@ -24,7 +25,6 @@ import (
 	"github.com/dominant-strategies/go-quai/common/hexutil"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
@@ -516,6 +516,7 @@ func (w *Wallet) printReceiptDetails(receipt *types.Receipt) {
 			fmt.Printf("      Value: %v\n", etx.Value())
 		}
 	}
+	fmt.Printf("\n")
 }
 
 // getStatusString converts receipt status to a human-readable string
@@ -709,6 +710,7 @@ func (w *Wallet) CreateTransaction(ctx context.Context, entry *wtypes.TransferEn
 		AccessList: types.AccessList{},
 	})
 
+	// todo 统一创建失败，maxnonce - 1
 	signedTx, err := types.SignTx(tx, types.NewSigner(w.chainID.Actual, w.location), w.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign transaction: %v", err)
